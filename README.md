@@ -13,9 +13,11 @@ O `PS2FileManager.elf` pronto está em [Releases](https://github.com/VeroSilvaa/
 | Dispositivo | Caminho | Navegar | Copiar | Mover | Excluir |
 |---|---|---|---|---|---|
 | Memory Card 1 e 2 | `mc0:` / `mc1:` | ✅ | ✅ | ✅ | ✅ |
-| Rede SMB | `smb0:` | ✅ | ✅ | em teste | ✅ |
-| HDD interno (APA/PFS) | `hdd0:` → `pfs0:`/`pfs1:` | ✅ | ✅ | em teste | em teste |
-| Pendrive USB (FAT32/exFAT) | `mass0:` / `mass1:` | ✅ | ✅ | em teste | em teste |
+| Rede SMB | `smb0:` | ✅ | ✅ | ✅ | ✅ |
+| HDD interno (APA/PFS) | `hdd0:` → `pfs0:`/`pfs1:` | ✅ | ✅ | ✅ | ✅ |
+| Pendrive USB (FAT32/exFAT) | `mass0:` / `mass1:` | ✅ | ✅ | ✅ | ✅ |
+
+Mover = cópia verificada → conferência dos totais (arquivos e bytes) → exclusão da origem. Se algo não bater, a origem é mantida.
 
 ## Recursos
 
@@ -91,6 +93,7 @@ Requisitos do servidor:
 
 ## Planejado
 
+- Instalar ISOs de jogos no HDD no formato HDLoader (compatível com o OPL)
 - Criar pasta e renomear com teclado virtual (e tela de configuração do SMB)
 - Formatação de pendrive/HDD
 - Interface gráfica 640×448 com gsKit
