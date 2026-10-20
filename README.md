@@ -24,6 +24,8 @@ Mover = cópia verificada → conferência dos totais (arquivos e bytes) → exc
 - Cópia **verificada byte a byte** (lê o destino de volta e compara)
 - Cópia recursiva de pastas e seleção múltipla
 - Copiar, recortar (mover), colar e excluir entre quaisquer dispositivos
+- **Criar pasta** e **renomear** com teclado virtual (no Memory Card, nomes de até 31 caracteres)
+- **Configuração de rede e SMB** na própria tela: DHCP ou IP estático, servidor, compartilhamento, usuário e senha
 - Progresso em tempo real: barras por arquivo e total, velocidade e tempo restante
 - Confirmação em tela cheia antes de excluir/mover
 - Proteção dos arquivos de sistema dos saves (`icon.sys`, `*.icn`, `B?DATA-SYSTEM`)
@@ -35,19 +37,19 @@ Instala ISOs de jogos de PS2 que estejam no **USB** ou no **SMB** diretamente no
 
 1. Marque uma ou mais ISOs com **Quadrado** e aperte **R1**.
 2. Escolha **Instalar no HDD (HDLoader)**. A opção só fica disponível se todos os itens marcados forem ISOs de jogo de PS2 (o ID é lido do `SYSTEM.CNF`) e houver um HDD formatado em APA.
-3. Confira a lista de jogos (ID, CD/DVD, tamanho) e aperte **X** para instalar.
+3. Confira a lista de jogos (ID, CD/DVD, tamanho). **Quadrado** liga ou desliga a *conferência completa* (padrão: desligada). Aperte **X** para instalar.
 
-Cada jogo vira uma partição `PP.<ID>.HDL.<nome>`, com subpartições quando ele não cabe numa só. Depois da gravação, o app:
+Cada jogo vira uma partição `PP.<ID>.HDL.<nome>`, com subpartições quando ele não cabe numa só (jogos acima de 1 GB). Depois da gravação, o app:
 
-- relê o HDD e compara com a ISO de origem;
-- lê o jogo **do mesmo jeito que o OPL**, pelo cabeçalho HDL e pelos LBAs do disco, e compara setores de cada fatia.
+- lê o jogo **do mesmo jeito que o OPL**, pelo cabeçalho HDL e pelos LBAs do disco, e compara setores de cada fatia (sempre, é rápido);
+- com a conferência completa ligada, relê também o HDD inteiro e compara com a ISO de origem (dobra o tempo).
 
 Se qualquer etapa falhar, a partição incompleta é apagada. Um jogo já instalado (mesmo ID) não é gravado de novo, só conferido.
 
 Limitações atuais:
 
 - **DVD de duas camadas (DVD9)** ainda não é suportado.
-- Pelo SMB a instalação é lenta, porque grava e depois confere a ISO inteira.
+- Pelo SMB a instalação é lenta (no PCSX2, cerca de 700 KB/s: um jogo de 1,2 GB leva uns 30 minutos sem a conferência completa).
 - Testado no PCSX2: o jogo aparece no OPL. Rodar o jogo pelo OPL **ainda não foi testado em console real**.
 
 ## Controles
@@ -61,7 +63,19 @@ Limitações atuais:
 | Triângulo | Marcar todos / desmarcar todos (na lista de arquivos); atualizar (na lista de dispositivos) |
 | Círculo | Voltar / cancelar |
 
-Excluir ou mover arquivos de sistema de um save só é confirmado com **Triângulo** (X é recusado).
+Excluir, mover ou renomear arquivos de sistema de um save só é confirmado com **Triângulo** (X é recusado).
+
+### Teclado virtual
+
+| Botão | Ação |
+|---|---|
+| Direcional | Mover na grade de caracteres |
+| X | Digitar o caractere |
+| Quadrado | Apagar |
+| R1 | Espaço |
+| Triângulo | Trocar entre maiúsculas, minúsculas e símbolos |
+| Start | Confirmar |
+| Círculo | Cancelar |
 
 ## Compilar
 
@@ -94,32 +108,39 @@ pcsx2-qt -elf PS2FileManager.elf
 
 ## Configurar o SMB (rede)
 
-Ainda não existe tela de configuração (depende do teclado virtual, planejado). Os dados do servidor estão **fixos no código**, em `src/main.c`:
+Na lista de dispositivos, abra **Configuracoes de rede e SMB** (último item):
 
-```c
-#define SMB_SERVER          "192.168.1.9"   /* IP do PC/servidor com o compartilhamento */
-#define SMB_SHARE           "samba"         /* nome do compartilhamento */
-#define SMB_USER            "guest"         /* usuario */
-#define SMB_PASSWORD        ""              /* senha (vazia = sem senha) */
-```
+| Campo | Padrão |
+|---|---|
+| Modo de IP | DHCP (X alterna para estático) |
+| IP do PS2, máscara, gateway, DNS | usados só no modo estático |
+| Servidor SMB | `192.168.1.9` (só IP, sem nome) |
+| Compartilhamento | `samba` |
+| Usuário | `guest` |
+| Senha | vazia |
 
-Para testar, escolha uma das opções:
+X edita o campo com o teclado virtual; **Start** (ou *Salvar*) grava em `mc0:/PS2FM/network.cfg` (ou `mc1:` sem cartão no slot 1). Ao salvar, a conexão SMB é refeita com os dados novos na próxima vez que o SMB for aberto.
 
-1. **Usar o ELF do release sem compilar:** configure seu servidor para bater com os valores acima: IP `192.168.1.9`, compartilhamento `samba`, acesso de convidado (`guest`) sem senha.
-2. **Compilar com os seus dados:** troque os quatro valores em `src/main.c` e compile (veja [Compilar](#compilar)).
+> A senha fica gravada em texto puro no arquivo do Memory Card.
 
 Requisitos do servidor:
 
 - **SMB1 (NT1) habilitado.** O módulo `smbman` do PS2SDK só fala SMB1, na porta 445. No Windows 10/11 o SMB1 vem desligado: ative *Suporte ao Compartilhamento de Arquivos SMB 1.0/CIFS* em *Recursos do Windows*. No Samba, use `server min protocol = NT1` no `smb.conf`.
-- **DHCP na rede:** o PS2 pega IP automaticamente e espera até 20 s.
+- **Compartilhamento com senha: NTLMv1.** O `smbman` autentica com NTLMv1. O Samba 4.5 ou mais novo recusa isso por padrão (erro *LOGON: autenticacao recusada*); acrescente no `[global]` do `smb.conf`:
+
+  ```ini
+  ntlm auth = ntlmv1-permitted
+  ```
+
+  e reinicie o `smbd`. Acesso de convidado (sem senha) não precisa disso.
+- **Rede:** com DHCP o PS2 espera até 20 s pelo IP; com IP estático, só pelo link.
 - No PCSX2, use a rede no modo *Sockets*, em *Configurações → Rede e HDD*.
 
 > ⚠️ Excluir arquivos no SMB apaga os arquivos **de verdade** no servidor.
 
 ## Planejado
 
-- HDLoader: DVD de duas camadas e conferência completa opcional
-- Criar pasta e renomear com teclado virtual (e tela de configuração do SMB)
+- HDLoader: DVD de duas camadas
 - Formatação de pendrive/HDD
 - Interface gráfica 640×448 com gsKit
 - Player de MP3, servidor FTP
