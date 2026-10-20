@@ -20,6 +20,7 @@
 #include <string.h>
 #include <strings.h>
 #include <time.h>
+#include <dirent.h>
 
 #include "memorycard.h"
 #include "filemanager.h"
@@ -29,6 +30,7 @@
 #include "smb.h"
 #include "hdd.h"
 #include "usb.h"
+#include "iso9660.h"
 
 
 
@@ -58,7 +60,13 @@ extern unsigned int size_mcserv_irx;
 
 #define MAX_VISIBLE_FILES   18
 
-#define MENU_ITEM_COUNT     8
+#define MENU_ITEM_COUNT     9
+#define MENU_HDL            7
+
+/*
+ * Instalacao HDLoader: jogos por vez.
+ */
+#define HDL_MAX_GAMES       16
 
 /*
  * SMB (Etapa 8). Fixo ate existir a tela de configuracao
@@ -99,6 +107,7 @@ static const char *operation_menu[MENU_ITEM_COUNT] = {
     "Excluir",
     "Selecionar todos",
     "Desmarcar todos",
+    "Instalar no HDD (HDLoader)",
     "Cancelar"
 };
 
@@ -132,6 +141,17 @@ typedef enum {
 
 static ConfirmAction confirm_action = CONFIRM_NONE;
 static int operation_menu_cursor = 0;
+
+/*
+ * Instalacao HDLoader: verificada ao abrir o menu R1.
+ */
+static IsoGameInfo hdl_games[HDL_MAX_GAMES];
+static char hdl_names[HDL_MAX_GAMES][FM_MAX_NAME];
+static int hdl_count = 0;
+static int hdl_available = 0;
+static int hdl_partitions = 0;
+static int hdl_info_open = 0;
+static char hdl_reason[96];
 
 static char status_message[256];
 
@@ -1662,6 +1682,257 @@ static void paste_clipboard(void)
 }
 
 /* ============================================================
+ * Instalacao HDLoader (Etapa 1: so verificacao, nada e gravado)
+ * ============================================================ */
+
+/*
+ * Nome do jogo a partir do arquivo: sem ".iso" e sem o ID
+ * no inicio (padrao do OPL "SLUS_123.45.Nome.iso").
+ */
+static void hdl_game_name(
+    char *out,
+    int size,
+    const char *file_name,
+    const char *game_id)
+{
+    int id_length;
+    int length;
+
+    id_length = strlen(game_id);
+
+    if (id_length > 0 &&
+        strncasecmp(file_name, game_id, id_length) == 0 &&
+        file_name[id_length] == '.')
+        file_name += id_length + 1;
+
+    snprintf(out, size, "%s", file_name);
+
+    length = strlen(out);
+
+    if (iso_has_extension(out))
+        out[length - 4] = '\0';
+}
+
+
+/*
+ * Opcao disponivel so se TODOS os selecionados forem ISO de
+ * jogo de PS2 e houver HDD formatado em APA.
+ */
+static void hdl_check(void)
+{
+    FMEntry *entry;
+    IsoGameInfo *game;
+    DIR *dir;
+    int selected;
+    int i;
+
+
+    hdl_count = 0;
+    hdl_available = 0;
+    hdl_partitions = 0;
+    selected = 0;
+
+
+    for (i = 0; i < file_manager.count; i++) {
+
+        entry = &file_manager.entries[i];
+
+        if (!entry->selected)
+            continue;
+
+        selected++;
+
+        if (entry->is_dir ||
+            !iso_has_extension(entry->name)) {
+
+            snprintf(
+                hdl_reason,
+                sizeof(hdl_reason),
+                "HDLoader: selecione so arquivos .iso (%.30s)",
+                entry->name
+            );
+
+            return;
+        }
+
+        if (hdl_count >= HDL_MAX_GAMES) {
+
+            snprintf(
+                hdl_reason,
+                sizeof(hdl_reason),
+                "HDLoader: maximo de %d jogos por vez.",
+                HDL_MAX_GAMES
+            );
+
+            return;
+        }
+
+        game = &hdl_games[hdl_count];
+
+        if (!iso_probe_game(entry->path, game)) {
+
+            printf(
+                "FM HDL: %s | nao e jogo de PS2: %s\n",
+                entry->path,
+                game->reason
+            );
+
+            snprintf(
+                hdl_reason,
+                sizeof(hdl_reason),
+                "HDLoader: %.30s: %s",
+                entry->name,
+                game->reason
+            );
+
+            return;
+        }
+
+        hdl_game_name(
+            hdl_names[hdl_count],
+            FM_MAX_NAME,
+            entry->name,
+            game->game_id
+        );
+
+        printf(
+            "FM HDL: %s | jogo %s | %s | %u setores | volume '%s' | nome '%s'\n",
+            entry->path,
+            game->game_id,
+            game->is_dvd ? "DVD" : "CD",
+            game->sectors,
+            game->volume_id,
+            hdl_names[hdl_count]
+        );
+
+        hdl_count++;
+    }
+
+
+    if (selected == 0) {
+
+        snprintf(
+            hdl_reason,
+            sizeof(hdl_reason),
+            "HDLoader: selecione ISOs de jogos (QUADRADO)."
+        );
+
+        return;
+    }
+
+
+    /*
+     * HDD so e iniciado quando a selecao e toda de jogos.
+     * APA = "hdd0:" lista as particoes.
+     */
+    if (hdd_init() < 0) {
+
+        snprintf(
+            hdl_reason,
+            sizeof(hdl_reason),
+            "HDLoader: sem HDD (%s)",
+            hdd_error()
+        );
+
+        return;
+    }
+
+    dir = opendir("hdd0:");
+
+    if (!dir) {
+
+        snprintf(
+            hdl_reason,
+            sizeof(hdl_reason),
+            "HDLoader: HDD nao formatado em APA."
+        );
+
+        return;
+    }
+
+    while (readdir(dir) != NULL)
+        hdl_partitions++;
+
+    closedir(dir);
+
+
+    hdl_available = 1;
+
+    printf(
+        "FM HDL: %d jogo(s), HDD APA com %d particao(oes)\n",
+        hdl_count,
+        hdl_partitions
+    );
+}
+
+
+static void draw_hdl_info(void)
+{
+    char size_text[24];
+    int i;
+
+
+    scr_printf("PS2FileManager\n");
+    scr_printf("===============\n\n");
+
+    scr_printf("INSTALAR NO HDD (HDLoader)\n\n");
+
+    scr_printf(
+        "%d jogo(s) reconhecido(s):\n\n",
+        hdl_count
+    );
+
+
+    /*
+     * Debug screen: ~28 linhas, 2 por jogo.
+     */
+    for (i = 0; i < hdl_count && i < 8; i++) {
+
+        format_size(
+            size_text,
+            sizeof(size_text),
+            (unsigned long long)hdl_games[i].sectors * ISO_SECTOR_SIZE
+        );
+
+        scr_printf(
+            "%-12s %-3s %10s  %s\n",
+            hdl_games[i].game_id,
+            hdl_games[i].is_dvd ? "DVD" : "CD",
+            size_text,
+            hdl_games[i].volume_id
+        );
+
+        scr_printf(
+            "   %.60s\n",
+            hdl_names[i]
+        );
+    }
+
+    if (hdl_count > 8)
+        scr_printf("... e mais %d\n", hdl_count - 8);
+
+
+    scr_printf(
+        "\nHDD: APA OK, %d particao(oes)\n",
+        hdl_partitions
+    );
+
+    scr_printf("\nA gravacao no HDD sera a proxima etapa.\n");
+    scr_printf("Nada foi alterado.\n\n");
+
+    scr_printf("O voltar\n");
+}
+
+
+static void update_hdl_info(void)
+{
+    if (pressed(PAD_CIRCLE) ||
+        pressed(PAD_CROSS))
+        hdl_info_open = 0;
+}
+
+
+/* ============================================================
  * Menu de operações
  * ============================================================ */
 
@@ -1810,9 +2081,31 @@ static void execute_operation_menu(void)
 
 
         /*
+         * INSTALAR NO HDD (HDLoader): por enquanto so mostra
+         * o que seria instalado.
+         */
+        case MENU_HDL:
+
+            operation_menu_open = 0;
+
+            if (!hdl_available) {
+
+                set_status(
+                    hdl_reason
+                );
+
+                break;
+            }
+
+            hdl_info_open = 1;
+
+            break;
+
+
+        /*
          * CANCELAR
          */
-        case 7:
+        case 8:
 
         default:
 
@@ -2264,6 +2557,14 @@ static void update_file_screen(void)
     }
 
 
+    if (hdl_info_open) {
+
+        update_hdl_info();
+
+        return;
+    }
+
+
     if (operation_menu_open) {
 
         update_operation_menu();
@@ -2446,6 +2747,8 @@ static void update_file_screen(void)
 
         operation_menu_cursor = 0;
 
+        hdl_check();
+
         operation_menu_open = 1;
 
         return;
@@ -2600,21 +2903,14 @@ static void draw_operation_menu(void)
          i < MENU_ITEM_COUNT;
          i++) {
 
-        if (i ==
-            operation_menu_cursor) {
-
-            scr_printf(
-                "> %s\n",
-                operation_menu[i]
-            );
-
-        } else {
-
-            scr_printf(
-                "  %s\n",
-                operation_menu[i]
-            );
-        }
+        scr_printf(
+            "%s %s%s\n",
+            i == operation_menu_cursor ? ">" : " ",
+            operation_menu[i],
+            i == MENU_HDL && !hdl_available
+                ? " [indisponivel]"
+                : ""
+        );
     }
 
 
@@ -2645,6 +2941,14 @@ static void draw_file_screen(void)
     if (confirm_action != CONFIRM_NONE) {
 
         draw_confirm();
+
+        return;
+    }
+
+
+    if (hdl_info_open) {
+
+        draw_hdl_info();
 
         return;
     }
