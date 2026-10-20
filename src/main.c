@@ -2494,9 +2494,12 @@ static void draw_device_screen(void)
             scr_printf("  ");
 
 
+        /*
+         * Sem "USB 1/2": o BDM numera na ordem de deteccao,
+         * nao pela porta (no PCSX2, mass0: e a porta 2).
+         */
         scr_printf(
-            "USB %d (mass%d:) [%s]\n",
-            i + 1,
+            "Pendrive USB (mass%d:) [%s]\n",
             i,
             !usb_ready()
                 ? "X para detectar"
