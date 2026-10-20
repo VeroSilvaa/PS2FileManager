@@ -14,10 +14,10 @@
 /*
  * Mesma ordem de carga do OPL/wLaunchELF:
  * usbd (pilha USB) -> bdm (dispositivos de bloco) ->
- * bdmfs_fatfs (FAT32/exFAT em massN:) -> usbmass_bd (pendrive).
+ * bdmfs_fatfs (FAT32/exFAT em usbN:) -> usbmass_bd (pendrive).
  *
  * A deteccao do pendrive e assincrona: depois de carregar,
- * espera-se ate USB_WAIT_SECONDS pela montagem de massN:.
+ * espera-se ate USB_WAIT_SECONDS pela montagem de usbN:.
  */
 
 #define USB_WAIT_SECONDS 5
@@ -90,7 +90,7 @@ int usb_available(int unit)
         unit >= USB_UNITS)
         return 0;
 
-    snprintf(root, sizeof(root), "mass%d:/", unit);
+    snprintf(root, sizeof(root), USB_PREFIX "%d:/", unit);
 
     dir = opendir(root);
 

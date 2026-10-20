@@ -91,7 +91,7 @@ extern unsigned int size_mcserv_irx;
 #define DEVICE_COUNT        7
 #define DEVICE_SMB          2
 #define DEVICE_HDD          3
-#define DEVICE_USB0         4   /* mass0:, DEVICE_USB0 + 1 = mass1: */
+#define DEVICE_USB0         4   /* usb0:, DEVICE_USB0 + 1 = usb1: */
 #define DEVICE_CONFIG       6   /* nao e dispositivo: tela de configuracao */
 
 
@@ -894,7 +894,7 @@ static void open_usb(int unit)
         snprintf(
             status_message,
             sizeof(status_message),
-            "Pendrive mass%d: nao encontrado.",
+            "Pendrive " USB_PREFIX "%d: nao encontrado.",
             unit
         );
 
@@ -905,7 +905,7 @@ static void open_usb(int unit)
     snprintf(
         root,
         sizeof(root),
-        "mass%d:/",
+        USB_PREFIX "%d:/",
         unit
     );
 
@@ -3851,10 +3851,10 @@ static void run_format_usb(void)
 
 
     /*
-     * O clipboard pode apontar para o pendrive (massN:).
+     * O clipboard pode apontar para o pendrive (usbN:).
      */
     if (clipboard.count > 0 &&
-        strncmp(clipboard.paths[0], "mass", 4) == 0)
+        strncmp(clipboard.paths[0], USB_PREFIX, strlen(USB_PREFIX)) == 0)
         clipboard_clear(&clipboard);
 
 
@@ -4035,7 +4035,7 @@ static void draw_format_usb(void)
         }
 
         scr_printf("\nO numero (usb0, usb1) e o do BDM: pode nao bater\n");
-        scr_printf("com mass0:/mass1: (ordem de montagem).\n\n");
+        scr_printf("com o usb0:/usb1: da lista (ordem de montagem).\n\n");
 
         scr_printf("X escolher | O cancelar\n");
 
@@ -4590,10 +4590,10 @@ static void draw_device_screen(void)
 
         /*
          * Sem "USB 1/2": o BDM numera na ordem de deteccao,
-         * nao pela porta (no PCSX2, mass0: e a porta 2).
+         * nao pela porta (no PCSX2, usb0: e a porta 2).
          */
         scr_printf(
-            "Pendrive USB (mass%d:) [%s]\n",
+            "Pendrive USB (" USB_PREFIX "%d:) [%s]\n",
             i,
             !usb_ready()
                 ? "X para detectar"
