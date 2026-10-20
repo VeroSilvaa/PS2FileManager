@@ -197,8 +197,13 @@ typedef enum {
 typedef enum {
     PARTITION_NONE = 0,
     PARTITION_MENU,
-    PARTITION_SIZE
+    PARTITION_SIZE,
+    PARTITION_CONFIRM_DELETE
 } PartitionStep;
+
+#define PARTITION_MENU_CREATE   0
+#define PARTITION_MENU_DELETE   1
+#define PARTITION_MENU_COUNT    3
 
 #define APA_MAX_NAME        31
 
@@ -2686,6 +2691,114 @@ static void create_partition(void)
 }
 
 
+/*
+ * Excluir: a particao selecionada (uma so) ou a do cursor.
+ */
+static void start_partition_delete(void)
+{
+    FMEntry *entry = NULL;
+    int selected;
+    int i;
+
+
+    selected = fm_selected_count(&file_manager);
+
+    if (selected > 1) {
+
+        set_status("Excluir particao: selecione so uma.");
+
+        return;
+    }
+
+    if (selected == 1) {
+
+        for (i = 0; i < file_manager.count; i++) {
+
+            if (file_manager.entries[i].selected) {
+
+                entry = &file_manager.entries[i];
+
+                break;
+            }
+        }
+
+    } else if (file_manager.count > 0) {
+
+        entry = &file_manager.entries[file_manager.cursor];
+    }
+
+    if (!entry) {
+
+        set_status("Nenhuma particao.");
+
+        return;
+    }
+
+
+    /*
+     * __mbr, __net, __system, __sysconf, __common...: do sistema.
+     */
+    if (strncmp(entry->name, "__", 2) == 0) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "%s e particao do sistema: nao pode ser excluida.",
+            entry->name
+        );
+
+        return;
+    }
+
+    snprintf(partition_name, sizeof(partition_name), "%s", entry->name);
+
+    partition_step = PARTITION_CONFIRM_DELETE;
+}
+
+
+static void delete_partition(void)
+{
+    int result;
+
+
+    /*
+     * O clipboard pode apontar para a particao (montada em pfsN:).
+     */
+    if (clipboard.count > 0 &&
+        hdd_partition_of(clipboard.paths[0]) &&
+        strcmp(hdd_partition_of(clipboard.paths[0]), partition_name) == 0)
+        clipboard_clear(&clipboard);
+
+
+    result = hdd_remove_partition(partition_name);
+
+    printf("FM PARTITION: excluir %s -> %d\n", partition_name, result);
+
+    fm_refresh(&file_manager);
+
+
+    if (result < 0) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "ERRO ao excluir %s: %s",
+            partition_name,
+            hdd_error()
+        );
+
+        return;
+    }
+
+    snprintf(
+        status_message,
+        sizeof(status_message),
+        "Particao %s excluida.",
+        partition_name
+    );
+}
+
+
 static void update_partition(void)
 {
     if (pressed(PAD_CIRCLE)) {
@@ -2700,19 +2813,42 @@ static void update_partition(void)
 
     if (partition_step == PARTITION_MENU) {
 
-        if (pressed(PAD_UP) || pressed(PAD_DOWN))
-            partition_cursor = !partition_cursor;
+        if (pressed(PAD_UP) && partition_cursor > 0)
+            partition_cursor--;
+
+        if (pressed(PAD_DOWN) && partition_cursor < PARTITION_MENU_COUNT - 1)
+            partition_cursor++;
 
         if (pressed(PAD_CROSS)) {
 
             partition_step = PARTITION_NONE;
 
-            if (partition_cursor == 0) {
+            if (partition_cursor == PARTITION_MENU_CREATE) {
 
                 osk_open("CRIAR PARTICAO: nome", "", APA_MAX_NAME);
 
                 keyboard_action = KEYBOARD_PARTITION;
+
+            } else if (partition_cursor == PARTITION_MENU_DELETE) {
+
+                start_partition_delete();
             }
+        }
+
+        return;
+    }
+
+
+    if (partition_step == PARTITION_CONFIRM_DELETE) {
+
+        if (pressed(PAD_CROSS))
+            set_status("Excluir particao: use TRIANGULO para confirmar.");
+
+        if (pressed(PAD_TRIANGLE)) {
+
+            partition_step = PARTITION_NONE;
+
+            delete_partition();
         }
 
         return;
@@ -2756,9 +2892,30 @@ static void draw_partition(void)
     if (partition_step == PARTITION_MENU) {
 
         scr_printf("%s Criar particao\n", partition_cursor == 0 ? ">" : " ");
-        scr_printf("%s Cancelar\n\n", partition_cursor == 1 ? ">" : " ");
+        scr_printf("%s Excluir particao\n", partition_cursor == 1 ? ">" : " ");
+        scr_printf("%s Cancelar\n\n", partition_cursor == 2 ? ">" : " ");
+
+        scr_printf("Excluir age na particao selecionada ou,\n");
+        scr_printf("sem selecao, na do cursor.\n\n");
 
         scr_printf("X confirmar | O cancelar\n");
+
+        return;
+    }
+
+
+    if (partition_step == PARTITION_CONFIRM_DELETE) {
+
+        scr_printf("EXCLUIR A PARTICAO?\n\n");
+        scr_printf("  %s\n\n", partition_name);
+
+        scr_printf("A particao e todas as subparticoes serao\n");
+        scr_printf("apagadas, com TODO o conteudo (arquivos ou\n");
+        scr_printf("jogo HDLoader). NAO pode ser desfeito.\n\n");
+
+        scr_printf("%s\n\n", status_message);
+
+        scr_printf("TRIANGULO excluir | O cancelar\n");
 
         return;
     }

@@ -714,6 +714,43 @@ int hdd_create_partition(const char *name, unsigned int size_mb)
 }
 
 
+int hdd_remove_partition(const char *name)
+{
+    char path[96];
+    int result;
+    int i;
+
+
+    if (!hdd_ready) {
+        hdd_set_error("HDD nao iniciado", 0);
+        return -1;
+    }
+
+    last_error[0] = '\0';
+
+
+    for (i = 0; i < HDD_SLOTS; i++) {
+
+        if (slots[i].mounted && strcmp(slots[i].name, name) == 0)
+            hdd_unmount_slot(&slots[i]);
+    }
+
+
+    snprintf(path, sizeof(path), "hdd0:%s", name);
+
+    result = fileXioRemove(path);
+
+    printf("HDD: remove %s -> %d\n", path, result);
+
+    if (result < 0) {
+        hdd_set_error("Excluir particao falhou", result);
+        return result;
+    }
+
+    return 0;
+}
+
+
 const char *hdd_error(void)
 {
     return last_error;

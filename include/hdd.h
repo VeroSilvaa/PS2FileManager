@@ -64,6 +64,12 @@ unsigned int hdd_free_mb(void);
  */
 int hdd_create_partition(const char *name, unsigned int size_mb);
 
+/*
+ * Exclui a particao (principal + subparticoes). Desmonta antes
+ * se estiver em pfs0:/pfs1:. 0 = ok.
+ */
+int hdd_remove_partition(const char *name);
+
 #define HDD_FORMAT_STEPS 5
 
 typedef void (*HddFormatStepFn)(int step, int total, const char *what);
