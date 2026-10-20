@@ -21,6 +21,8 @@
 #include <strings.h>
 #include <time.h>
 #include <dirent.h>
+#include <errno.h>
+#include <sys/stat.h>
 
 #include "memorycard.h"
 #include "filemanager.h"
@@ -32,6 +34,7 @@
 #include "usb.h"
 #include "iso9660.h"
 #include "hdl.h"
+#include "osk.h"
 
 
 
@@ -61,8 +64,15 @@ extern unsigned int size_mcserv_irx;
 
 #define MAX_VISIBLE_FILES   18
 
-#define MENU_ITEM_COUNT     9
-#define MENU_HDL            7
+#define MENU_ITEM_COUNT     10
+#define MENU_HDL            8
+
+/*
+ * Nome de arquivo no Memory Card: ate 31 caracteres. Nos outros
+ * dispositivos o limite e o que cabe numa linha da debug screen.
+ */
+#define MC_MAX_NAME         31
+#define NAME_MAX_TYPED      60
 
 /*
  * Instalacao HDLoader: jogos por vez.
@@ -104,6 +114,7 @@ static const char *operation_menu[MENU_ITEM_COUNT] = {
     "Copiar",
     "Recortar (mover)",
     "Colar",
+    "Criar pasta",
     "Renomear [desativado]",
     "Excluir",
     "Selecionar todos",
@@ -142,6 +153,16 @@ typedef enum {
 
 static ConfirmAction confirm_action = CONFIRM_NONE;
 static int operation_menu_cursor = 0;
+
+/*
+ * Teclado virtual aberto para (Etapa 4c).
+ */
+typedef enum {
+    KEYBOARD_NONE = 0,
+    KEYBOARD_MKDIR
+} KeyboardAction;
+
+static KeyboardAction keyboard_action = KEYBOARD_NONE;
 
 /*
  * Instalacao HDLoader: verificada ao abrir o menu R1.
@@ -2174,6 +2195,149 @@ static void update_hdl_info(void)
 
 
 /* ============================================================
+ * Criar pasta (Etapa 4c)
+ * ============================================================ */
+
+/*
+ * Nome digitado: nao vazio, sem espaco nas pontas, nao "." / "..".
+ */
+static int name_is_valid(const char *name)
+{
+    int length = strlen(name);
+
+    if (length == 0)
+        return 0;
+
+    if (name[0] == ' ' || name[length - 1] == ' ')
+        return 0;
+
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+        return 0;
+
+    return 1;
+}
+
+
+/*
+ * Ja existe na pasta atual? Sem diferenciar maiusculas
+ * (FAT e SMB nao diferenciam).
+ */
+static int name_exists(const char *name)
+{
+    int i;
+
+    for (i = 0; i < file_manager.count; i++) {
+
+        if (strcasecmp(file_manager.entries[i].name, name) == 0)
+            return 1;
+    }
+
+    return 0;
+}
+
+
+static void create_folder(const char *name)
+{
+    char path[FM_MAX_PATH];
+    int result;
+
+
+    if (!name_is_valid(name)) {
+
+        set_status("Nome invalido.");
+
+        return;
+    }
+
+    if (name_exists(name)) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "Ja existe: %s",
+            name
+        );
+
+        return;
+    }
+
+    if (!build_destination_path(
+            file_manager.current_path,
+            name,
+            path,
+            sizeof(path))) {
+
+        set_status("Caminho invalido.");
+
+        return;
+    }
+
+
+    errno = 0;
+
+    result = mkdir(path, 0777);
+
+    printf("FM MKDIR: %s -> %d (errno %d)\n", path, result, errno);
+
+
+    if (hdd_mounted_count() > 0)
+        hdd_sync_all();
+
+    fm_refresh(&file_manager);
+
+
+    if (result < 0) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "Erro ao criar pasta %s (%d)",
+            name,
+            errno
+        );
+
+        return;
+    }
+
+    snprintf(
+        status_message,
+        sizeof(status_message),
+        "Pasta criada: %s",
+        name
+    );
+}
+
+
+static void update_keyboard(void)
+{
+    KeyboardAction action;
+    OskResult result;
+
+
+    result = osk_update(new_pad & ~old_pad);
+
+    if (result == OSK_EDITING)
+        return;
+
+
+    action = keyboard_action;
+
+    keyboard_action = KEYBOARD_NONE;
+
+
+    if (result == OSK_CANCEL) {
+
+        set_status("Cancelado.");
+
+        return;
+    }
+
+    if (action == KEYBOARD_MKDIR)
+        create_folder(osk_text());
+}
+
+
+/* ============================================================
  * Menu de operações
  * ============================================================ */
 
@@ -2243,9 +2407,29 @@ static void execute_operation_menu(void)
 
 
         /*
-         * RENOMEAR
+         * CRIAR PASTA: abre o teclado virtual.
          */
         case 3:
+
+            operation_menu_open = 0;
+
+            osk_open(
+                "CRIAR PASTA",
+                "",
+                strncmp(file_manager.current_path, "mc", 2) == 0
+                    ? MC_MAX_NAME
+                    : NAME_MAX_TYPED
+            );
+
+            keyboard_action = KEYBOARD_MKDIR;
+
+            break;
+
+
+        /*
+         * RENOMEAR
+         */
+        case 4:
 
             set_status(
                 "Renomear ainda esta desativado."
@@ -2259,7 +2443,7 @@ static void execute_operation_menu(void)
         /*
          * EXCLUIR
          */
-        case 4:
+        case 5:
 
             operation_menu_open = 0;
 
@@ -2288,7 +2472,7 @@ static void execute_operation_menu(void)
         /*
          * SELECIONAR TODOS
          */
-        case 5:
+        case 6:
 
             fm_select_all(
                 &file_manager
@@ -2306,7 +2490,7 @@ static void execute_operation_menu(void)
         /*
          * DESMARCAR TODOS
          */
-        case 6:
+        case 7:
 
             fm_clear_selection(
                 &file_manager
@@ -2346,7 +2530,7 @@ static void execute_operation_menu(void)
         /*
          * CANCELAR
          */
-        case 8:
+        case 9:
 
         default:
 
@@ -2798,6 +2982,14 @@ static void update_file_screen(void)
     }
 
 
+    if (keyboard_action != KEYBOARD_NONE) {
+
+        update_keyboard();
+
+        return;
+    }
+
+
     if (hdl_info_open) {
 
         update_hdl_info();
@@ -3182,6 +3374,14 @@ static void draw_file_screen(void)
     if (confirm_action != CONFIRM_NONE) {
 
         draw_confirm();
+
+        return;
+    }
+
+
+    if (keyboard_action != KEYBOARD_NONE) {
+
+        osk_draw();
 
         return;
     }
