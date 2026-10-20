@@ -585,6 +585,234 @@ static int hdl_stream(
 }
 
 
+/* ============================================================
+ * Conferencia "como o OPL"
+ *
+ * Independente do hdlwrite: acha o jogo, le o cabecalho e le
+ * setores da ISO exatamente como o OPL (src/hdd.c e
+ * modules/iopcore/cdvdman/device-hdd.c), direto do disco por LBA.
+ * ============================================================ */
+
+#define HDL_FS_MAGIC      0x1337
+#define APA_FLAG_SUB      0x0001
+
+/*
+ * Setores de CD conferidos por fatia: primeiro, ultimo e
+ * pontos igualmente espacados no meio.
+ */
+#define OPL_SAMPLES       16
+
+/*
+ * HDIOC_READSECTOR: no maximo 2 setores (1 KB) por chamada,
+ * como o OPL.
+ */
+static int opl_read_lba(u32 lba, u32 count, void *out)
+{
+    hddAtaTransfer_t args;
+    unsigned char *dest = out;
+    u32 n;
+    int result;
+
+    while (count > 0) {
+
+        n = count > 2 ? 2 : count;
+
+        args.lba = lba;
+        args.size = n;
+
+        result = fileXioDevctl("hdd0:", HDIOC_READSECTOR, &args, sizeof(args), dest, n * 512);
+
+        if (result != 0)
+            return result < 0 ? result : -1;
+
+        lba += n;
+        count -= n;
+        dest += n * 512;
+    }
+
+    return 0;
+}
+
+
+/*
+ * LBA do cabecalho, pelo mesmo caminho do hddGetHDLGamelist do OPL.
+ */
+static int opl_find_header(const char *part_name, u32 *header_lba)
+{
+    iox_dirent_t dirent;
+    int found = 0;
+    int fd;
+
+    fd = fileXioDopen("hdd0:");
+
+    if (fd < 0)
+        return fd;
+
+    while (fileXioDread(fd, &dirent) > 0) {
+
+        if (dirent.stat.mode == HDL_FS_MAGIC &&
+            !(dirent.stat.attr & APA_FLAG_SUB) &&
+            strcmp(dirent.name, part_name) == 0) {
+
+            *header_lba = dirent.stat.private_5 + (HDL_GAME_DATA_OFFSET + 4096) / 512;
+            found = 1;
+            break;
+        }
+    }
+
+    fileXioDclose(fd);
+
+    return found ? 0 : -1;
+}
+
+
+static int opl_check_header(const hdl_header_t *h, const IsoGameInfo *game)
+{
+    u32 offset = 0;
+    int i;
+
+    if (h->num_partitions < 1 || h->num_partitions > HDL_MAX_PARTS)
+        return -1;
+
+    if (h->discType != (game->is_dvd ? HDL_DISC_DVD : HDL_DISC_CD))
+        return -2;
+
+    if (strncmp(h->startup, game->game_id, sizeof(h->startup)) != 0)
+        return -3;
+
+    for (i = 0; i < h->num_partitions; i++) {
+
+        if (h->part_specs[i].part_offset != offset ||
+            h->part_specs[i].part_size == 0 ||
+            h->part_specs[i].part_size % 2048)
+            return -4;
+
+        offset += h->part_specs[i].part_size / 2048;
+    }
+
+    if (offset != game->sectors)
+        return -5;
+
+    return 0;
+}
+
+
+static int hdl_check_opl(
+    const char *iso_path,
+    const char *part_name,
+    const IsoGameInfo *game,
+    unsigned char *buffer,
+    unsigned char *other)
+{
+    hdl_header_t *h = (hdl_header_t *)buffer;
+    hdl_part_spec_t specs[HDL_MAX_PARTS];
+    u32 header_lba;
+    int nparts;
+    int checked = 0;
+    int source;
+    int result;
+    int i;
+    int s;
+
+
+    result = opl_find_header(part_name, &header_lba);
+
+    if (result < 0) {
+        hdl_set_error("OPL: particao HDL nao encontrada na lista", result);
+        return -1;
+    }
+
+    result = opl_read_lba(header_lba, 2, buffer);
+
+    if (result < 0) {
+        hdl_set_error("OPL: ler cabecalho", result);
+        return -1;
+    }
+
+    printf(
+        "FM HDL: OPL cabecalho LBA 0x%08x | '%.40s' | boot %s | tipo 0x%02x | %d fatia(s)\n",
+        header_lba,
+        h->gamename,
+        h->startup,
+        (unsigned int)h->discType,
+        h->num_partitions
+    );
+
+    result = opl_check_header(h, game);
+
+    if (result < 0) {
+        hdl_set_error("OPL: cabecalho invalido", result);
+        return -1;
+    }
+
+    nparts = h->num_partitions;
+    memcpy(specs, h->part_specs, sizeof(specs));
+
+
+    source = open(iso_path, O_RDONLY);
+
+    if (source < 0) {
+        hdl_set_error("OPL: abrir ISO", source);
+        return -1;
+    }
+
+    for (i = 0; i < nparts; i++) {
+
+        u32 count = specs[i].part_size / 2048;
+
+        for (s = 0; s < OPL_SAMPLES; s++) {
+
+            u32 lsn;
+            u32 lba;
+            off_t position;
+
+            lsn = specs[i].part_offset +
+                  (u32)((unsigned long long)(count - 1) * s / (OPL_SAMPLES - 1));
+
+            /*
+             * Mesma conta do cdvdman do OPL.
+             */
+            lba = specs[i].data_start + ((lsn - specs[i].part_offset) << 2);
+
+            position = (off_t)lsn * 2048;
+
+            if (sizeof(off_t) < 8 && lsn >= 0x100000)
+                continue;   /* > 2 GB sem off_t de 64 bits */
+
+            if (lseek(source, position, SEEK_SET) != position ||
+                read(source, buffer, 2048) != 2048) {
+                close(source);
+                hdl_set_error("OPL: ler ISO", (int)lsn);
+                return -1;
+            }
+
+            result = opl_read_lba(lba, 4, other);
+
+            if (result < 0) {
+                close(source);
+                hdl_set_error("OPL: ler HDD", (int)lsn);
+                return -1;
+            }
+
+            if (memcmp(buffer, other, 2048) != 0) {
+                close(source);
+                printf("FM HDL: OPL DIFERENTE: fatia %d, setor de CD %u, LBA 0x%08x\n", i, lsn, lba);
+                hdl_set_error("OPL: setor diferente", (int)lsn);
+                return -1;
+            }
+
+            checked++;
+        }
+    }
+
+    close(source);
+
+    printf("FM HDL: OPL conferencia OK: %d setores de CD em %d fatia(s)\n", checked, nparts);
+
+    return 0;
+}
+
+
 int hdl_install(const char *iso_path, const IsoGameInfo *game, const char *title)
 {
     hdl_header_t *header;
@@ -614,10 +842,42 @@ int hdl_install(const char *iso_path, const IsoGameInfo *game, const char *title
         return -1;
     }
 
-    if (hdl_already_installed(disc_id, existing, sizeof(existing))) {
-        snprintf(last_error, sizeof(last_error), "ja instalado: %s", existing);
-        printf("FM HDL: %s\n", last_error);
+    header = memalign(64, sizeof(hdl_header_t));
+    buffer = memalign(64, HDL_CHUNK);
+    other = memalign(64, HDL_CHUNK);
+
+    if (!header || !buffer || !other) {
+        free(header);
+        free(buffer);
+        free(other);
+        hdl_set_error("sem memoria", 0);
         return -1;
+    }
+
+
+    /*
+     * Ja instalado: nao grava; confere o que esta no HDD como o OPL.
+     */
+    if (hdl_already_installed(disc_id, existing, sizeof(existing))) {
+
+        printf("FM HDL: ja instalado: %s\n", existing);
+
+        result = hdl_check_opl(iso_path, existing, game, buffer, other);
+
+        snprintf(
+            path,
+            sizeof(path),
+            "%s",
+            result == 0 ? "conferido como o OPL: OK" : "conferencia OPL FALHOU"
+        );
+
+        if (result == 0)
+            snprintf(last_error, sizeof(last_error), "ja instalado (%s)", path);
+        else
+            printf("FM HDL: %s\n", path);
+
+        result = -1;
+        goto end;
     }
 
     hdl_part_name(part_name, disc_id, title);
@@ -630,17 +890,6 @@ int hdl_install(const char *iso_path, const IsoGameInfo *game, const char *title
         game->sectors,
         title
     );
-
-
-    header = memalign(64, sizeof(hdl_header_t));
-    buffer = memalign(64, HDL_CHUNK);
-    other = memalign(64, HDL_CHUNK);
-
-    if (!header || !buffer || !other) {
-        hdl_set_error("sem memoria", 0);
-        result = -1;
-        goto end;
-    }
 
 
     result = hdl_create_partition(part_name, game, title, header);
@@ -658,6 +907,11 @@ int hdl_install(const char *iso_path, const IsoGameInfo *game, const char *title
         goto remove;
 
     result = hdl_stream(iso_path, part_name, total, HDL_PHASE_VERIFY, buffer, other);
+
+    if (result < 0)
+        goto remove;
+
+    result = hdl_check_opl(iso_path, part_name, game, buffer, other);
 
     if (result < 0)
         goto remove;
