@@ -4,6 +4,7 @@
 /PS2DVDPlayer/
 /HDLGameInstaller/
 /Open-PS2-Loader/
+/ps2sdk-ref/
 
 # Saidas de build
 *.o

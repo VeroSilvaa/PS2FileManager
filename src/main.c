@@ -139,6 +139,33 @@ static int mc1_available = 0;
 
 static int usb_present[USB_UNITS];
 
+/*
+ * Formatacao (R1 na lista de dispositivos). Por enquanto so
+ * HDD em APA; FAT32/exFAT dependem de um modulo IOP proprio.
+ */
+typedef enum {
+    FORMAT_NONE = 0,
+    FORMAT_MENU,
+    FORMAT_CONFIRM,     /* 1a confirmacao: TRIANGULO */
+    FORMAT_CONFIRM2     /* 2a confirmacao: START */
+} FormatStep;
+
+#define FORMAT_OPTION_APA    0
+#define FORMAT_OPTION_COUNT  4
+
+static const char *format_options[FORMAT_OPTION_COUNT] = {
+    "APA (padrao PS2)",
+    "FAT32 [em breve]",
+    "exFAT [em breve]",
+    "Cancelar"
+};
+
+static FormatStep format_step = FORMAT_NONE;
+static int format_cursor = 0;
+static unsigned int format_total_mb;
+static int format_formatted;
+static int format_partitions;
+
 static int operation_menu_open = 0;
 
 /*
@@ -3184,11 +3211,281 @@ static void update_operation_menu(void)
 
 
 /* ============================================================
+ * Formatacao (lista de dispositivos, R1)
+ * ============================================================ */
+
+static void start_format(void)
+{
+    if (device_cursor == 0 || device_cursor == 1) {
+
+        set_status("Memory Card nunca e formatado pelo programa.");
+
+        return;
+    }
+
+    if (device_cursor == DEVICE_SMB || device_cursor == DEVICE_CONFIG) {
+
+        set_status("Este item nao pode ser formatado.");
+
+        return;
+    }
+
+    if (device_cursor >= DEVICE_USB0) {
+
+        set_status("Formatar USB (FAT32/exFAT): em breve.");
+
+        return;
+    }
+
+
+    /*
+     * HDD: precisa da pilha ATAD/APA carregada (tambem com o
+     * disco sem formato).
+     */
+    if (hdd_init() < 0) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "HDD indisponivel: %s",
+            hdd_error()
+        );
+
+        return;
+    }
+
+    format_total_mb = hdd_total_mb();
+    format_formatted = hdd_is_formatted();
+    format_partitions = format_formatted ? hdd_partition_count() : 0;
+
+    printf(
+        "FM FORMAT: HDD %u MB, APA %s, %d particao(oes)\n",
+        format_total_mb,
+        format_formatted ? "sim" : "nao",
+        format_partitions
+    );
+
+    format_cursor = 0;
+    format_step = FORMAT_MENU;
+}
+
+
+/*
+ * Progresso por etapa: o driver nao informa progresso dentro
+ * de cada format (cada um leva poucos segundos).
+ */
+static void format_step_draw(int step, int total, const char *what)
+{
+    draw_progress_bar(
+        6,
+        "Etapas",
+        (unsigned long long)step,
+        (unsigned long long)total
+    );
+
+    scr_setXY(0, 8);
+
+    scr_printf(
+        "Etapa %d de %d: %-30s\n",
+        step < total ? step + 1 : total,
+        total,
+        what
+    );
+
+    printf("FM FORMAT: etapa %d/%d %s\n", step, total, what);
+}
+
+
+static void run_format_apa(void)
+{
+    int result;
+
+
+    scr_clear();
+
+    scr_printf("PS2FileManager\n");
+    scr_printf("===============\n\n");
+    scr_printf("FORMATANDO O HDD EM APA...\n");
+    scr_printf("Nao desligue o console.\n");
+
+
+    /*
+     * O clipboard pode apontar para particoes que vao sumir.
+     */
+    if (clipboard.count > 0 &&
+        (strncmp(clipboard.paths[0], "pfs", 3) == 0 ||
+         strncmp(clipboard.paths[0], "hdd", 3) == 0))
+        clipboard_clear(&clipboard);
+
+
+    result = hdd_format_apa(format_step_draw);
+
+    printf("FM FORMAT: APA -> %d\n", result);
+
+
+    if (result < 0) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "ERRO ao formatar: %s",
+            hdd_error()
+        );
+
+        return;
+    }
+
+    snprintf(
+        status_message,
+        sizeof(status_message),
+        "HDD formatado em APA: %d particao(oes).",
+        hdd_partition_count()
+    );
+}
+
+
+static void update_format(void)
+{
+    if (pressed(PAD_CIRCLE)) {
+
+        format_step = FORMAT_NONE;
+
+        set_status("Formatacao cancelada.");
+
+        return;
+    }
+
+
+    switch (format_step) {
+
+        case FORMAT_MENU:
+
+            if (pressed(PAD_UP) && format_cursor > 0)
+                format_cursor--;
+
+            if (pressed(PAD_DOWN) && format_cursor < FORMAT_OPTION_COUNT - 1)
+                format_cursor++;
+
+            if (pressed(PAD_CROSS)) {
+
+                if (format_cursor == FORMAT_OPTION_APA) {
+
+                    format_step = FORMAT_CONFIRM;
+
+                } else if (format_cursor == FORMAT_OPTION_COUNT - 1) {
+
+                    format_step = FORMAT_NONE;
+
+                    set_status("Formatacao cancelada.");
+
+                } else {
+
+                    set_status("FAT32/exFAT no HDD: em breve.");
+                }
+            }
+
+            break;
+
+
+        case FORMAT_CONFIRM:
+
+            if (pressed(PAD_TRIANGLE))
+                format_step = FORMAT_CONFIRM2;
+
+            break;
+
+
+        case FORMAT_CONFIRM2:
+
+            if (pressed(PAD_START)) {
+
+                format_step = FORMAT_NONE;
+
+                run_format_apa();
+            }
+
+            break;
+
+
+        default:
+            format_step = FORMAT_NONE;
+            break;
+    }
+}
+
+
+static void draw_format(void)
+{
+    int i;
+
+
+    scr_printf("PS2FileManager\n");
+    scr_printf("===============\n\n");
+    scr_printf("FORMATAR: HDD interno (hdd0:)\n\n");
+
+    scr_printf("Capacidade : %u MB\n", format_total_mb);
+
+    if (format_formatted)
+        scr_printf("Formato    : APA, %d particao(oes)\n\n", format_partitions);
+    else
+        scr_printf("Formato    : sem formato APA\n\n");
+
+
+    if (format_step == FORMAT_MENU) {
+
+        for (i = 0; i < FORMAT_OPTION_COUNT; i++)
+            scr_printf("%s %s\n", i == format_cursor ? ">" : " ", format_options[i]);
+
+        scr_printf("\n%s\n\n", status_message);
+
+        scr_printf("X escolher | O cancelar\n");
+
+        return;
+    }
+
+
+    scr_printf("ATENCAO: TODOS OS DADOS DO HDD SERAO APAGADOS:\n");
+    scr_printf("todas as particoes, jogos HDLoader, saves do\n");
+    scr_printf("__common e o que mais houver no disco.\n\n");
+
+    scr_printf("Sera criado: __mbr, __net, __system, __sysconf e\n");
+    scr_printf("__common (PFS), como o wLaunchELF.\n\n");
+
+
+    if (format_step == FORMAT_CONFIRM) {
+
+        scr_printf("TRIANGULO continuar | O cancelar\n");
+
+    } else {
+
+        scr_printf("ULTIMA CONFIRMACAO.\n\n");
+        scr_printf("START FORMATAR AGORA | O cancelar\n");
+    }
+}
+
+
+/* ============================================================
  * Tela de dispositivos
  * ============================================================ */
 
 static void update_device_screen(void)
 {
+    if (format_step != FORMAT_NONE) {
+
+        update_format();
+
+        return;
+    }
+
+
+    if (pressed(PAD_R1)) {
+
+        start_format();
+
+        return;
+    }
+
+
     if (pressed(PAD_UP)) {
 
         if (device_cursor > 0)
@@ -3514,6 +3811,13 @@ static void draw_device_screen(void)
 
     scr_clear();
 
+    if (format_step != FORMAT_NONE) {
+
+        draw_format();
+
+        return;
+    }
+
     scr_printf(
         "PS2FileManager\n"
     );
@@ -3620,6 +3924,10 @@ static void draw_device_screen(void)
 
     scr_printf(
         "TRIANGLE Atualizar dispositivos\n"
+    );
+
+    scr_printf(
+        "R1       Formatar (HDD)\n"
     );
 
 

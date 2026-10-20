@@ -31,6 +31,31 @@ const char *hdd_partition_of(const char *path);
 
 int hdd_mounted_count(void);
 
+/*
+ * Desmonta pfs0:/pfs1: (antes de formatar).
+ */
+void hdd_unmount_all(void);
+
+/*
+ * Disco: tamanho em MB, se esta formatado em APA e quantas
+ * particoes principais (sem subparticoes) existem.
+ */
+unsigned int hdd_total_mb(void);
+int hdd_is_formatted(void);
+int hdd_partition_count(void);
+
+/*
+ * Formata em APA (cria __mbr, __net, __system, __sysconf,
+ * __common) e formata essas quatro em PFS, como a libhdd do
+ * PS2SDK (usada pelo wLaunchELF). APAGA TUDO. 0 = ok.
+ * step (opcional) e chamado antes de cada etapa (0..total-1).
+ */
+#define HDD_FORMAT_STEPS 5
+
+typedef void (*HddFormatStepFn)(int step, int total, const char *what);
+
+int hdd_format_apa(HddFormatStepFn step);
+
 const char *hdd_error(void);
 
 #endif

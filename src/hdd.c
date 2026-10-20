@@ -359,6 +359,143 @@ int hdd_mounted_count(void)
 }
 
 
+void hdd_unmount_all(void)
+{
+    int i;
+
+    for (i = 0; i < HDD_SLOTS; i++)
+        hdd_unmount_slot(&slots[i]);
+}
+
+
+unsigned int hdd_total_mb(void)
+{
+    int sectors;
+
+    if (!hdd_ready)
+        return 0;
+
+    sectors = fileXioDevctl("hdd0:", HDIOC_TOTALSECTOR, NULL, 0, NULL, 0);
+
+    if (sectors <= 0)
+        return 0;
+
+    return (unsigned int)sectors / 2048;
+}
+
+
+/*
+ * HDIOC_STATUS: 0 = APA formatado; 1..3 = sem formato/inutilizavel.
+ */
+int hdd_is_formatted(void)
+{
+    if (!hdd_ready)
+        return 0;
+
+    return fileXioDevctl("hdd0:", HDIOC_STATUS, NULL, 0, NULL, 0) == 0;
+}
+
+
+/*
+ * Subparticoes (jogos HDLoader > 1 GB) tem o bit 0 do attr.
+ */
+#define APA_FLAG_SUB 0x0001
+
+int hdd_partition_count(void)
+{
+    iox_dirent_t entry;
+    int count = 0;
+    int fd;
+
+    if (!hdd_ready)
+        return -1;
+
+    fd = fileXioDopen("hdd0:");
+
+    if (fd < 0)
+        return fd;
+
+    while (fileXioDread(fd, &entry) > 0) {
+
+        if (!(entry.stat.attr & APA_FLAG_SUB))
+            count++;
+    }
+
+    fileXioDclose(fd);
+
+    return count;
+}
+
+
+/*
+ * Zona do PFS: mesmo valor da libhdd (PFS_ZONE_SIZE).
+ */
+static const int pfs_format_arg[1] = { 8192 };
+
+int hdd_format_apa(HddFormatStepFn step)
+{
+    static const char *partitions[] = {
+        "hdd0:__net",
+        "hdd0:__system",
+        "hdd0:__sysconf",
+        "hdd0:__common",
+        NULL
+    };
+
+    int result;
+    int i;
+
+
+    if (!hdd_ready) {
+        hdd_set_error("HDD nao iniciado", 0);
+        return -1;
+    }
+
+    last_error[0] = '\0';
+
+    hdd_unmount_all();
+
+
+    if (step)
+        step(0, HDD_FORMAT_STEPS, "APA (tabela de particoes)");
+
+    result = fileXioFormat("hdd0:", NULL, NULL, 0);
+
+    printf("HDD: format hdd0: (APA) -> %d\n", result);
+
+    if (result < 0) {
+        hdd_set_error("Formatar APA falhou", result);
+        return result;
+    }
+
+
+    for (i = 0; partitions[i]; i++) {
+
+        if (step)
+            step(i + 1, HDD_FORMAT_STEPS, partitions[i] + 5);
+
+        result = fileXioFormat(
+            "pfs:",
+            partitions[i],
+            (const char *)pfs_format_arg,
+            sizeof(pfs_format_arg)
+        );
+
+        printf("HDD: format pfs %s -> %d\n", partitions[i], result);
+
+        if (result < 0) {
+            hdd_set_error("Formatar PFS falhou", result);
+            return result;
+        }
+    }
+
+    if (step)
+        step(HDD_FORMAT_STEPS, HDD_FORMAT_STEPS, "concluido");
+
+    return 0;
+}
+
+
 const char *hdd_error(void)
 {
     return last_error;
