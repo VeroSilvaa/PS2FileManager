@@ -541,9 +541,46 @@ static void open_hdd(void)
 }
 
 
+/*
+ * Ponto de montagem ("pfsN:") usado pelo clipboard, que
+ * nao pode ser desmontado. NULL se o clipboard nao usa HDD.
+ */
+static const char *clipboard_pfs_point(void)
+{
+    static char point[8];
+    const char *colon;
+    int length;
+
+
+    if (clipboard.mode == CLIPBOARD_NONE ||
+        clipboard.count <= 0 ||
+        strncmp(clipboard.paths[0], "pfs", 3) != 0)
+        return NULL;
+
+
+    colon = strchr(clipboard.paths[0], ':');
+
+    if (!colon)
+        return NULL;
+
+    length = (int)(colon - clipboard.paths[0]) + 1;
+
+    if (length >= (int)sizeof(point))
+        return NULL;
+
+    memcpy(point, clipboard.paths[0], length);
+    point[length] = '\0';
+
+    return point;
+}
+
+
 static void enter_partition(void)
 {
     FMEntry *entry;
+    const char *point;
+    char root[16];
+    char name[64];
 
 
     if (file_manager.count <= 0)
@@ -554,13 +591,31 @@ static void enter_partition(void)
         &file_manager.entries[file_manager.cursor];
 
 
-    if (hdd_mount_partition(entry->name) < 0) {
+    /*
+     * Copia o nome: fm_init() substitui a lista (e o entry).
+     */
+    snprintf(
+        name,
+        sizeof(name),
+        "%s",
+        entry->name
+    );
+
+
+    point =
+        hdd_mount_partition(
+            name,
+            clipboard_pfs_point()
+        );
+
+
+    if (!point) {
 
         snprintf(
             status_message,
             sizeof(status_message),
             "ERRO: %s: %s",
-            entry->name,
+            name,
             hdd_error()
         );
 
@@ -568,33 +623,54 @@ static void enter_partition(void)
     }
 
 
+    snprintf(
+        root,
+        sizeof(root),
+        "%s/",
+        point
+    );
+
+
     fm_init(
         &file_manager,
-        "pfs0:/"
+        root
     );
 
 
     snprintf(
         status_message,
         sizeof(status_message),
-        "Particao %s montada em pfs0:/",
-        hdd_mounted_name()
+        "Particao %s montada em %s",
+        name,
+        root
     );
 }
 
 
+/*
+ * Sair da particao NAO desmonta: o clipboard pode apontar
+ * para ela (copiar do HDD para outro dispositivo).
+ */
 static void leave_partition(void)
 {
-    hdd_unmount();
+    const char *name;
+    char saved[64];
 
-    /*
-     * Caminhos pfs0: no clipboard apontariam para a
-     * proxima particao montada.
-     */
-    if (clipboard.mode != CLIPBOARD_NONE &&
-        clipboard.count > 0 &&
-        strncmp(clipboard.paths[0], "pfs0:", 5) == 0)
-        clipboard_clear(&clipboard);
+
+    name =
+        hdd_partition_of(
+            file_manager.current_path
+        );
+
+    snprintf(
+        saved,
+        sizeof(saved),
+        "%s",
+        name ? name : "?"
+    );
+
+
+    hdd_sync_all();
 
 
     fm_init(
@@ -603,11 +679,13 @@ static void leave_partition(void)
     );
 
 
-    set_status(
-        "Particao desmontada."
+    snprintf(
+        status_message,
+        sizeof(status_message),
+        "Particao %s continua montada.",
+        saved
     );
 }
-
 
 /* ============================================================
  * Abre Memory Card
@@ -880,7 +958,7 @@ static int clipboard_has_system(void)
  * Executa Colar (copiar ou mover)
  * ============================================================ */
 
-static void run_paste(void)
+static void run_paste_items(void)
 {
     int i;
     int result;
@@ -1098,9 +1176,320 @@ static void run_paste(void)
 
 
 /* ============================================================
- * Colar clipboard
+ * Progresso em tempo real
  * ============================================================ */
 
+#define PROGRESS_BAR_WIDTH  30
+
+static clock_t progress_start;
+static clock_t progress_last_draw;
+
+static unsigned long long progress_total;
+static unsigned long long progress_done;
+
+static int progress_files_total;
+static int progress_file_index;
+
+
+static void format_size(
+    char *out,
+    int size,
+    unsigned long long bytes)
+{
+    if (bytes >= 1048576ULL) {
+
+        snprintf(
+            out,
+            size,
+            "%llu.%llu MB",
+            bytes / 1048576ULL,
+            (bytes % 1048576ULL) * 10ULL / 1048576ULL
+        );
+
+    } else if (bytes >= 1024ULL) {
+
+        snprintf(
+            out,
+            size,
+            "%llu KB",
+            bytes / 1024ULL
+        );
+
+    } else {
+
+        snprintf(
+            out,
+            size,
+            "%llu B",
+            bytes
+        );
+    }
+}
+
+
+static void format_time(
+    char *out,
+    int size,
+    unsigned long seconds)
+{
+    snprintf(
+        out,
+        size,
+        "%02lu:%02lu",
+        seconds / 60,
+        seconds % 60
+    );
+}
+
+
+static void draw_progress_bar(
+    int row,
+    const char *label,
+    unsigned long long done,
+    unsigned long long total)
+{
+    char bar[PROGRESS_BAR_WIDTH + 1];
+    int percent;
+    int filled;
+    int i;
+
+
+    percent =
+        total
+            ? (int)(done * 100ULL / total)
+            : 100;
+
+    if (percent > 100)
+        percent = 100;
+
+    filled =
+        percent * PROGRESS_BAR_WIDTH / 100;
+
+    for (i = 0; i < PROGRESS_BAR_WIDTH; i++)
+        bar[i] = (i < filled) ? '#' : '-';
+
+    bar[PROGRESS_BAR_WIDTH] = '\0';
+
+
+    scr_setXY(0, row);
+
+    scr_printf(
+        "%-8s [%s] %3d%%   \n",
+        label,
+        bar,
+        percent
+    );
+}
+
+
+static void paste_progress(
+    int phase,
+    const char *path,
+    unsigned int file_done,
+    unsigned int file_total,
+    unsigned int step)
+{
+    clock_t now;
+    unsigned long elapsed_ms;
+    unsigned long long speed;
+    unsigned long remaining;
+
+    char text_done[24];
+    char text_total[24];
+    char text_elapsed[16];
+    char text_remaining[16];
+    char text_speed[24];
+
+
+    now = clock();
+
+    progress_done += step;
+
+
+    if (phase == FILEIO_PHASE_COPY &&
+        step == 0)
+        progress_file_index++;
+
+
+    /*
+     * Ate ~5 atualizacoes por segundo; inicio e fim de
+     * cada arquivo sempre aparecem.
+     */
+    if (step != 0 &&
+        file_done < file_total &&
+        now - progress_last_draw < CLOCKS_PER_SEC / 5)
+        return;
+
+    progress_last_draw = now;
+
+
+    elapsed_ms =
+        (unsigned long)((now - progress_start) * 1000ULL / CLOCKS_PER_SEC);
+
+    speed =
+        elapsed_ms
+            ? progress_done * 1000ULL / elapsed_ms
+            : 0;
+
+    remaining =
+        speed
+            ? (unsigned long)((progress_total - progress_done) / speed)
+            : 0;
+
+
+    scr_setXY(0, 4);
+
+    scr_printf(
+        "Arquivo %d de %d: %-36.36s\n",
+        progress_file_index,
+        progress_files_total,
+        path_filename(path)
+    );
+
+    scr_setXY(0, 5);
+
+    scr_printf(
+        "Fase: %-12s\n",
+        phase == FILEIO_PHASE_COPY
+            ? "copiando"
+            : "verificando"
+    );
+
+
+    draw_progress_bar(
+        7,
+        "Arquivo",
+        file_done,
+        file_total
+    );
+
+    format_size(text_done, sizeof(text_done), file_done);
+    format_size(text_total, sizeof(text_total), file_total);
+
+    scr_setXY(0, 8);
+
+    scr_printf(
+        "         %s de %s            \n",
+        text_done,
+        text_total
+    );
+
+
+    /*
+     * Total = bytes copiados + bytes verificados.
+     */
+    draw_progress_bar(
+        10,
+        "Total",
+        progress_done,
+        progress_total
+    );
+
+    format_time(text_elapsed, sizeof(text_elapsed), elapsed_ms / 1000);
+    format_time(text_remaining, sizeof(text_remaining), remaining);
+    format_size(text_speed, sizeof(text_speed), speed);
+
+    scr_setXY(0, 11);
+
+    scr_printf(
+        "         Decorrido %s | Restante ~%s | %s/s      \n",
+        text_elapsed,
+        text_remaining,
+        text_speed
+    );
+}
+
+
+/*
+ * Mede a selecao, abre a tela de progresso e executa.
+ */
+static void run_paste(void)
+{
+    unsigned long long total_bytes;
+    unsigned long elapsed_ms;
+    int total_files;
+    int i;
+
+    char text_total[24];
+
+
+    scr_clear();
+
+    scr_printf("PS2FileManager\n");
+    scr_printf("===============\n");
+    scr_printf(
+        "%s %d item(ns) para %-30.30s\n",
+        clipboard.mode == CLIPBOARD_MOVE
+            ? "MOVENDO"
+            : "COPIANDO",
+        clipboard.count,
+        file_manager.current_path
+    );
+
+    scr_setXY(0, 4);
+    scr_printf("Calculando tamanho...\n");
+
+
+    total_bytes = 0;
+    total_files = 0;
+
+    for (i = 0; i < clipboard.count; i++) {
+
+        fileio_measure(
+            clipboard.paths[i],
+            &total_bytes,
+            &total_files
+        );
+    }
+
+
+    format_size(text_total, sizeof(text_total), total_bytes);
+
+    scr_setXY(0, 13);
+
+    scr_printf(
+        "Selecao: %d arquivo(s), %s\n",
+        total_files,
+        text_total
+    );
+
+
+    progress_total = total_bytes * 2ULL;
+    progress_done = 0;
+    progress_files_total = total_files;
+    progress_file_index = 0;
+    progress_start = clock();
+    progress_last_draw = 0;
+
+
+    fileio_set_progress(paste_progress);
+
+    run_paste_items();
+
+    fileio_set_progress(NULL);
+
+    /*
+     * Particoes do HDD ficam montadas: grava ja no disco.
+     */
+    if (hdd_mounted_count() > 0)
+        hdd_sync_all();
+
+
+    elapsed_ms =
+        (unsigned long)((clock() - progress_start) * 1000ULL / CLOCKS_PER_SEC);
+
+    printf(
+        "FM PASTE: %d arquivo(s), %llu bytes, %lu ms\n",
+        total_files,
+        total_bytes,
+        elapsed_ms
+    );
+}
+
+
+/* ============================================================
+ * Colar clipboard
+ * ============================================================ */
 static void paste_clipboard(void)
 {
     if (clipboard.mode ==
@@ -1453,10 +1842,17 @@ static void update_confirm(void)
 
         confirm_action = CONFIRM_NONE;
 
-        if (action == CONFIRM_DELETE)
+        if (action == CONFIRM_DELETE) {
+
             delete_selection();
-        else
+
+            if (hdd_mounted_count() > 0)
+                hdd_sync_all();
+
+        } else {
+
             run_paste();
+        }
 
         return;
     }
@@ -1805,7 +2201,7 @@ static void update_file_screen(void)
         if (!fm_back(
                 &file_manager)) {
 
-            if (strncmp(file_manager.current_path, "pfs0:", 5) == 0) {
+            if (strncmp(file_manager.current_path, "pfs", 3) == 0) {
 
                 leave_partition();
 
@@ -1989,10 +2385,8 @@ static void draw_device_screen(void)
 
 
     scr_printf(
-        "HDD interno (hdd0:) [%s]\n",
-        hdd_is_mounted()
-            ? hdd_mounted_name()
-            : "particoes"
+        "HDD interno (hdd0:) [%d montada(s)]\n",
+        hdd_mounted_count()
     );
 
     scr_printf(

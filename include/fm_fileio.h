@@ -76,6 +76,37 @@ int fileio_delete(
     FileDeleteStatus *status
 );
 
+/*
+ * Progresso em tempo real (copia e verificacao).
+ *
+ * file_done/file_total: bytes do arquivo atual.
+ * step: bytes processados desde a chamada anterior
+ *       (0 = inicio de um arquivo/fase).
+ */
+#define FILEIO_PHASE_COPY      1
+#define FILEIO_PHASE_VERIFY    2
+
+typedef void (*FileProgressFn)(
+    int phase,
+    const char *path,
+    unsigned int file_done,
+    unsigned int file_total,
+    unsigned int step
+);
+
+void fileio_set_progress(
+    FileProgressFn fn
+);
+
+/*
+ * Soma tamanho e quantidade de arquivos (recursivo).
+ */
+int fileio_measure(
+    const char *path,
+    unsigned long long *bytes,
+    int *files
+);
+
 const char *fileio_error_string(
     int error
 );

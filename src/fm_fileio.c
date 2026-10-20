@@ -11,7 +11,10 @@
 #include "fm_fileio.h"
 
 
-#define FMIO_BUFFER_SIZE    4096
+/*
+ * 32 KB: com 4 KB cada bloco era uma ida-e-volta na rede (SMB).
+ */
+#define FMIO_BUFFER_SIZE    32768
 #define FMIO_MAX_PATH       1024
 #define FMIO_MAX_RECURSION  16
 #define FMIO_NAME_MAX       256
@@ -28,6 +31,41 @@ static unsigned char verify_source_buffer[
 static unsigned char verify_destination_buffer[
     FMIO_BUFFER_SIZE
 ] __attribute__((aligned(64)));
+
+
+/* ============================================================
+ * PROGRESSO
+ * ============================================================ */
+
+static FileProgressFn fmio_progress_fn = NULL;
+
+static unsigned int fmio_file_total = 0;
+static unsigned int fmio_file_done = 0;
+
+
+void fileio_set_progress(
+    FileProgressFn fn)
+{
+    fmio_progress_fn = fn;
+}
+
+
+static void fmio_progress(
+    int phase,
+    const char *path,
+    unsigned int step)
+{
+    if (!fmio_progress_fn)
+        return;
+
+    fmio_progress_fn(
+        phase,
+        path,
+        fmio_file_done,
+        fmio_file_total,
+        step
+    );
+}
 
 
 /* ============================================================
@@ -442,7 +480,16 @@ static int fmio_verify_file(
         if (status)
             status->bytes_verified +=
                 source_read;
-    }
+
+
+        fmio_file_done +=
+            source_read;
+
+        fmio_progress(
+            FILEIO_PHASE_VERIFY,
+            destination,
+            source_read
+        );    }
 
 
     fmio_close(source_fd);
@@ -539,6 +586,26 @@ static int fmio_copy_regular_file(
     }
 
 
+    {
+        struct stat st;
+
+        memset(&st, 0, sizeof(st));
+
+        fmio_file_total =
+            (stat(source, &st) == 0)
+                ? (unsigned int)st.st_size
+                : 0;
+
+        fmio_file_done = 0;
+
+        fmio_progress(
+            FILEIO_PHASE_COPY,
+            source,
+            0
+        );
+    }
+
+
     while (1) {
 
         errno = 0;
@@ -614,7 +681,16 @@ static int fmio_copy_regular_file(
             if (status)
                 status->bytes_copied +=
                     bytes_written;
-        }
+
+
+            fmio_file_done +=
+                bytes_written;
+
+            fmio_progress(
+                FILEIO_PHASE_COPY,
+                source,
+                bytes_written
+            );        }
     }
 
 
@@ -662,6 +738,15 @@ static int fmio_copy_regular_file(
      * Verifica antes de considerar
      * o arquivo concluído.
      */
+    fmio_file_done = 0;
+
+    fmio_progress(
+        FILEIO_PHASE_VERIFY,
+        destination,
+        0
+    );
+
+
     result = fmio_verify_file(
         source,
         destination,
@@ -1065,6 +1150,99 @@ int fileio_copy_file(
 
 
     return FILEIO_COPY_OK;
+}
+
+
+/* ============================================================
+ * MEDICAO (para a barra de progresso total)
+ * ============================================================ */
+
+static int fmio_measure_path(
+    const char *path,
+    unsigned long long *bytes,
+    int *files,
+    int recursion)
+{
+    DIR *dir;
+    struct dirent *entry;
+    struct stat st;
+
+    char child[
+        FMIO_MAX_PATH
+    ];
+
+    int is_directory;
+
+
+    if (recursion > FMIO_MAX_RECURSION)
+        return FILEIO_ERROR_RECURSION;
+
+
+    if (!fmio_get_type(path, &is_directory))
+        return FILEIO_ERROR_NOT_FOUND;
+
+
+    if (!is_directory) {
+
+        memset(&st, 0, sizeof(st));
+
+        if (stat(path, &st) == 0)
+            *bytes += (unsigned long long)st.st_size;
+
+        (*files)++;
+
+        return FILEIO_COPY_OK;
+    }
+
+
+    dir = opendir(path);
+
+    if (!dir)
+        return FILEIO_ERROR_OPENDIR;
+
+
+    while ((entry = readdir(dir)) != NULL) {
+
+        if (strcmp(entry->d_name, ".") == 0 ||
+            strcmp(entry->d_name, "..") == 0)
+            continue;
+
+        if (!fmio_join_path(
+                path,
+                entry->d_name,
+                child,
+                sizeof(child)))
+            continue;
+
+        fmio_measure_path(
+            child,
+            bytes,
+            files,
+            recursion + 1
+        );
+    }
+
+
+    closedir(dir);
+
+    return FILEIO_COPY_OK;
+}
+
+
+int fileio_measure(
+    const char *path,
+    unsigned long long *bytes,
+    int *files)
+{
+    if (!path || !bytes || !files)
+        return FILEIO_ERROR_INVALID_PATH;
+
+    return fmio_measure_path(
+        path,
+        bytes,
+        files,
+        0
+    );
 }
 
 

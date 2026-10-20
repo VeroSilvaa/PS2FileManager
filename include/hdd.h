@@ -5,19 +5,31 @@
  * HDD interno (Etapa 5): APA (particoes) + PFS (arquivos).
  * Baseado no hdd.c do PS2DVDPlayer.
  *
- * - "hdd0:"  lista de particoes (somente leitura aqui)
- * - "pfs0:/" particao montada
+ * - "hdd0:"          lista de particoes (somente leitura aqui)
+ * - "pfs0:", "pfs1:" particoes montadas (continuam montadas
+ *                    ao navegar em outros dispositivos)
  */
 
 int hdd_init(void);
 
-int hdd_mount_partition(const char *name);
+/*
+ * Monta (ou reutiliza) a particao e devolve o ponto de
+ * montagem ("pfs0:"/"pfs1:"). keep_point nunca e desmontado
+ * (o clipboard aponta para ele). NULL em caso de erro.
+ */
+const char *hdd_mount_partition(const char *name, const char *keep_point);
 
-void hdd_unmount(void);
+/*
+ * Grava no disco os dados pendentes de todas as particoes.
+ */
+void hdd_sync_all(void);
 
-int hdd_is_mounted(void);
+/*
+ * Nome da particao montada em "pfsN:..." (NULL se nenhuma).
+ */
+const char *hdd_partition_of(const char *path);
 
-const char *hdd_mounted_name(void);
+int hdd_mounted_count(void);
 
 const char *hdd_error(void);
 
