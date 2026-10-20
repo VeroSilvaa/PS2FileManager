@@ -8,6 +8,9 @@
 *.elf
 /irx/
 
+# Imagens de pendrive de teste (recriar com usb/mkimg.sh)
+/usb/*.img
+
 # Notas internas de desenvolvimento
 /PS2FileManager_Prompt_Desenvolvimento.md
 /função do mp3 player.md

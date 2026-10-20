@@ -28,6 +28,7 @@
 #include "network.h"
 #include "smb.h"
 #include "hdd.h"
+#include "usb.h"
 
 
 
@@ -70,9 +71,10 @@ extern unsigned int size_mcserv_irx;
 #define SMB_PASSWORD        ""
 #define SMB_DHCP_TIMEOUT    20
 
-#define DEVICE_COUNT        4
+#define DEVICE_COUNT        6
 #define DEVICE_SMB          2
 #define DEVICE_HDD          3
+#define DEVICE_USB0         4   /* mass0:, DEVICE_USB0 + 1 = mass1: */
 
 
 /* ============================================================
@@ -114,6 +116,8 @@ static int device_cursor = 0;
 
 static int mc0_available = 0;
 static int mc1_available = 0;
+
+static int usb_present[USB_UNITS];
 
 static int operation_menu_open = 0;
 
@@ -305,11 +309,19 @@ static int pressed(u32 button)
 
 static void refresh_devices(void)
 {
+    int i;
+
     mc0_available =
         memorycard_available(0);
 
     mc1_available =
         memorycard_available(1);
+
+    /*
+     * USB so depois de carregado (o primeiro X carrega).
+     */
+    for (i = 0; i < USB_UNITS; i++)
+        usb_present[i] = usb_available(i);
 
 
     snprintf(
@@ -688,12 +700,95 @@ static void leave_partition(void)
 }
 
 /* ============================================================
+ * USB (Etapa 6)
+ * ============================================================ */
+
+static void open_usb(int unit)
+{
+    char root[16];
+    int i;
+
+
+    if (!usb_ready()) {
+
+        scr_clear();
+
+        scr_printf("PS2FileManager\n");
+        scr_printf("===============\n\n");
+        scr_printf("Iniciando USB (USBD/BDM/FATFS)...\n");
+        scr_printf("Procurando pendrives...\n");
+
+        if (usb_init() < 0) {
+
+            snprintf(
+                status_message,
+                sizeof(status_message),
+                "ERRO USB: %s",
+                usb_error()
+            );
+
+            return;
+        }
+    }
+
+
+    for (i = 0; i < USB_UNITS; i++)
+        usb_present[i] = usb_available(i);
+
+    if (!usb_present[unit]) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "Pendrive mass%d: nao encontrado.",
+            unit
+        );
+
+        return;
+    }
+
+
+    snprintf(
+        root,
+        sizeof(root),
+        "mass%d:/",
+        unit
+    );
+
+
+    fm_init(
+        &file_manager,
+        root
+    );
+
+
+    current_screen =
+        SCREEN_FILES;
+
+
+    snprintf(
+        status_message,
+        sizeof(status_message),
+        "Aberto: %s",
+        root
+    );
+}
+
+
+/* ============================================================
  * Abre Memory Card
  * ============================================================ */
 
 static void open_device(int device)
 {
     char path[16];
+
+    if (device >= DEVICE_USB0) {
+
+        open_usb(device - DEVICE_USB0);
+
+        return;
+    }
 
     if (device == DEVICE_SMB) {
 
@@ -2322,6 +2417,8 @@ static void update_file_screen(void)
 
 static void draw_device_screen(void)
 {
+    int i;
+
     scr_clear();
 
     scr_printf(
@@ -2388,6 +2485,26 @@ static void draw_device_screen(void)
         "HDD interno (hdd0:) [%d montada(s)]\n",
         hdd_mounted_count()
     );
+
+    for (i = 0; i < USB_UNITS; i++) {
+
+        if (device_cursor == DEVICE_USB0 + i)
+            scr_printf("> ");
+        else
+            scr_printf("  ");
+
+
+        scr_printf(
+            "USB %d (mass%d:) [%s]\n",
+            i + 1,
+            i,
+            !usb_ready()
+                ? "X para detectar"
+                : usb_present[i]
+                    ? "OK"
+                    : "AUSENTE"
+        );
+    }
 
     scr_printf(
         "\n\n"
