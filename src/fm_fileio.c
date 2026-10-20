@@ -1356,6 +1356,23 @@ int fileio_delete(
 
 
     /*
+     * "hdd0:NOME" e uma PARTICAO inteira: nunca excluir
+     * por aqui (formatacao/particoes sao etapa propria).
+     */
+    if (strncmp(path, "hdd", 3) == 0) {
+
+        fmio_delete_error(
+            status,
+            FILEIO_ERROR_PROTECTED,
+            0,
+            "PROTECTED PARTITION"
+        );
+
+        return FILEIO_ERROR_PROTECTED;
+    }
+
+
+    /*
      * Nunca apagar a raiz de um dispositivo
      * ("mc0:", "mc0:/", "mass:/" ...).
      */

@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "network.h"
+#include "dev9.h"
 
 /*
  * Copiado do PS2DVDPlayer (src/network.c), onde DHCP e SMB ja
@@ -31,9 +32,6 @@
  *   que o SMBMAN use a mesma interface que recebe o DHCP.
  *   O EE acessa essa pilha via RPC (PS2IPS / -lps2ips).
  */
-
-extern unsigned char DEV9_irx[];
-extern unsigned int size_DEV9_irx;
 
 extern unsigned char SMAP_irx[];
 extern unsigned int size_SMAP_irx;
@@ -233,22 +231,19 @@ int network_init(void)
     SifInitIopHeap();
     sbv_patch_enable_lmb();
 
+    /*
+     * DEV9 compartilhado com o HDD: dev9_load() so carrega
+     * o IRX na primeira vez.
+     */
     printf("NETWORK: loading DEV9\n");
 
-    result = SifExecModuleBuffer(
-        DEV9_irx,
-        size_DEV9_irx,
-        0,
-        NULL,
-        NULL
-    );
+    result = dev9_load();
 
     if (result < 0)
     {
         printf("NETWORK: DEV9 failed: %d\n", result);
         return -1;
     }
-
 
     printf("NETWORK: loading NETMAN\n");
 

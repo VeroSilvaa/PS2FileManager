@@ -27,6 +27,7 @@
 #include "fm_fileio.h"
 #include "network.h"
 #include "smb.h"
+#include "hdd.h"
 
 
 
@@ -69,8 +70,9 @@ extern unsigned int size_mcserv_irx;
 #define SMB_PASSWORD        ""
 #define SMB_DHCP_TIMEOUT    20
 
-#define DEVICE_COUNT        3
+#define DEVICE_COUNT        4
 #define DEVICE_SMB          2
+#define DEVICE_HDD          3
 
 
 /* ============================================================
@@ -489,6 +491,125 @@ static void open_smb(void)
 
 
 /* ============================================================
+ * HDD interno (Etapa 5)
+ * ============================================================ */
+
+static int is_partition_list(void)
+{
+    return strcmp(file_manager.current_path, "hdd0:") == 0;
+}
+
+
+static void open_hdd(void)
+{
+    scr_clear();
+
+    scr_printf("PS2FileManager\n");
+    scr_printf("===============\n\n");
+    scr_printf("Iniciando HDD (DEV9/ATAD/APA/PFS)...\n");
+
+
+    if (hdd_init() < 0) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "ERRO HDD: %s",
+            hdd_error()
+        );
+
+        return;
+    }
+
+
+    fm_init(
+        &file_manager,
+        "hdd0:"
+    );
+
+
+    current_screen =
+        SCREEN_FILES;
+
+
+    snprintf(
+        status_message,
+        sizeof(status_message),
+        "HDD: %d particao(oes). X monta a particao.",
+        file_manager.count
+    );
+}
+
+
+static void enter_partition(void)
+{
+    FMEntry *entry;
+
+
+    if (file_manager.count <= 0)
+        return;
+
+
+    entry =
+        &file_manager.entries[file_manager.cursor];
+
+
+    if (hdd_mount_partition(entry->name) < 0) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "ERRO: %s: %s",
+            entry->name,
+            hdd_error()
+        );
+
+        return;
+    }
+
+
+    fm_init(
+        &file_manager,
+        "pfs0:/"
+    );
+
+
+    snprintf(
+        status_message,
+        sizeof(status_message),
+        "Particao %s montada em pfs0:/",
+        hdd_mounted_name()
+    );
+}
+
+
+static void leave_partition(void)
+{
+    hdd_unmount();
+
+    /*
+     * Caminhos pfs0: no clipboard apontariam para a
+     * proxima particao montada.
+     */
+    if (clipboard.mode != CLIPBOARD_NONE &&
+        clipboard.count > 0 &&
+        strncmp(clipboard.paths[0], "pfs0:", 5) == 0)
+        clipboard_clear(&clipboard);
+
+
+    fm_init(
+        &file_manager,
+        "hdd0:"
+    );
+
+
+    set_status(
+        "Particao desmontada."
+    );
+}
+
+
+/* ============================================================
  * Abre Memory Card
  * ============================================================ */
 
@@ -499,6 +620,13 @@ static void open_device(int device)
     if (device == DEVICE_SMB) {
 
         open_smb();
+
+        return;
+    }
+
+    if (device == DEVICE_HDD) {
+
+        open_hdd();
 
         return;
     }
@@ -1638,6 +1766,15 @@ static void update_file_screen(void)
      * Nesta etapa arquivos comuns não são
      * executados.
      */
+    if (pressed(PAD_CROSS) &&
+        is_partition_list()) {
+
+        enter_partition();
+
+        return;
+    }
+
+
     if (pressed(PAD_CROSS)) {
 
         if (fm_enter(
@@ -1667,6 +1804,13 @@ static void update_file_screen(void)
 
         if (!fm_back(
                 &file_manager)) {
+
+            if (strncmp(file_manager.current_path, "pfs0:", 5) == 0) {
+
+                leave_partition();
+
+                return;
+            }
 
             current_screen =
                 SCREEN_DEVICES;
@@ -1754,6 +1898,17 @@ static void update_file_screen(void)
      *
      * abre menu de operações.
      */
+    if (pressed(PAD_R1) &&
+        is_partition_list()) {
+
+        set_status(
+            "Lista de particoes: operacoes bloqueadas."
+        );
+
+        return;
+    }
+
+
     if (pressed(PAD_R1)) {
 
         operation_menu_cursor = 0;
@@ -1825,6 +1980,19 @@ static void draw_device_screen(void)
         smb_get_info()->connected
             ? "CONECTADO"
             : SMB_SERVER "/" SMB_SHARE
+    );
+
+    if (device_cursor == DEVICE_HDD)
+        scr_printf("> ");
+    else
+        scr_printf("  ");
+
+
+    scr_printf(
+        "HDD interno (hdd0:) [%s]\n",
+        hdd_is_mounted()
+            ? hdd_mounted_name()
+            : "particoes"
     );
 
     scr_printf(

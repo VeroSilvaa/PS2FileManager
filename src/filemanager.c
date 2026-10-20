@@ -93,8 +93,48 @@ static int fm_list_posix(const char *path, FMEntry *entries, int max_entries)
     return count;
 }
 
-void fm_init(FileManager *fm, const char *path)
+/*
+ * Lista de particoes do HDD ("hdd0:"). Cada particao vira uma
+ * "pasta"; entrar nela significa monta-la em pfs0: (main.c).
+ */
+static int fm_list_partitions(FMEntry *entries, int max_entries)
 {
+    DIR *dir;
+    struct dirent *de;
+    int count = 0;
+
+    dir = opendir("hdd0:");
+
+    if (!dir) {
+        printf("FM LIST: opendir(hdd0:) falhou\n");
+        return -1;
+    }
+
+    while (count < max_entries && (de = readdir(dir)) != NULL) {
+
+        FMEntry *entry = &entries[count];
+
+        if (de->d_name[0] == '\0')
+            continue;
+
+        memset(entry, 0, sizeof(FMEntry));
+
+        strncpy(entry->name, de->d_name, FM_MAX_NAME - 1);
+        snprintf(entry->path, FM_MAX_PATH, "hdd0:%s", de->d_name);
+
+        entry->is_dir = 1;
+
+        count++;
+    }
+
+    closedir(dir);
+
+    printf("FM LIST: hdd0: -> %d particoes\n", count);
+
+    return count;
+}
+
+void fm_init(FileManager *fm, const char *path){
     memset(fm, 0, sizeof(FileManager));
 
     strncpy(
@@ -108,8 +148,14 @@ void fm_init(FileManager *fm, const char *path)
 
 int fm_refresh(FileManager *fm)
 {
-    if (strncmp(fm->current_path, "mc", 2) == 0) {
+    if (strcmp(fm->current_path, "hdd0:") == 0) {
 
+        fm->count = fm_list_partitions(
+            fm->entries,
+            FM_MAX_FILES
+        );
+
+    } else if (strncmp(fm->current_path, "mc", 2) == 0) {
         fm->count = memorycard_list(
             fm->current_path,
             fm->entries,

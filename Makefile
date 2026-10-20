@@ -1,6 +1,6 @@
 EE_BIN = PS2FileManager.elf
 
-EE_OBJS = src/main.o src/memorycard.o src/filemanager.o src/clipboard.o src/fm_fileio.o src/network.o src/smb.o
+EE_OBJS = src/main.o src/memorycard.o src/filemanager.o src/clipboard.o src/fm_fileio.o src/network.o src/smb.o src/dev9.o src/hdd.o
 
 # Modulos IOP do PS2SDK embutidos no ELF (mesmo modelo do wLaunchELF)
 IRX_OBJS = irx/iomanX_irx.o irx/fileXio_irx.o irx/mcman_irx.o irx/mcserv_irx.o
@@ -8,6 +8,8 @@ IRX_OBJS = irx/iomanX_irx.o irx/fileXio_irx.o irx/mcman_irx.o irx/mcserv_irx.o
 # Rede + SMB (mesmos modulos e nomes de simbolo do PS2DVDPlayer)
 IRX_OBJS += irx/DEV9_irx.o irx/NETMAN_irx.o irx/SMAP_irx.o irx/PS2IP_irx.o irx/PS2IPS_irx.o irx/SMBMAN_irx.o
 
+# HDD interno: ATAD + APA + PFS
+IRX_OBJS += irx/PS2ATAD_irx.o irx/PS2HDD_irx.o irx/PS2FS_irx.o
 EE_OBJS += $(IRX_OBJS)
 
 EE_INCS = -I$(PS2SDK)/ee/include -I$(PS2SDK)/common/include -Iinclude
@@ -47,6 +49,17 @@ irx/SMBMAN_irx.c: $(PS2SDK)/iop/irx/smbman.irx
 	@mkdir -p irx
 	bin2c $< $@ SMBMAN_irx
 
+irx/PS2ATAD_irx.c: $(PS2SDK)/iop/irx/ps2atad.irx
+	@mkdir -p irx
+	bin2c $< $@ PS2ATAD_irx
+
+irx/PS2HDD_irx.c: $(PS2SDK)/iop/irx/ps2hdd.irx
+	@mkdir -p irx
+	bin2c $< $@ PS2HDD_irx
+
+irx/PS2FS_irx.c: $(PS2SDK)/iop/irx/ps2fs.irx
+	@mkdir -p irx
+	bin2c $< $@ PS2FS_irx
 clean:
 	rm -f $(EE_BIN) $(EE_OBJS)
 	rm -rf irx
