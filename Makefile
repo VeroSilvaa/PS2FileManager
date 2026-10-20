@@ -1,6 +1,6 @@
 EE_BIN = PS2FileManager.elf
 
-EE_OBJS = src/main.o src/memorycard.o src/filemanager.o src/clipboard.o src/fm_fileio.o src/network.o src/smb.o src/dev9.o src/hdd.o src/usb.o src/iso9660.o
+EE_OBJS = src/main.o src/memorycard.o src/filemanager.o src/clipboard.o src/fm_fileio.o src/network.o src/smb.o src/dev9.o src/hdd.o src/usb.o src/iso9660.o src/hdl.o
 
 # Modulos IOP do PS2SDK embutidos no ELF (mesmo modelo do wLaunchELF)
 IRX_OBJS = irx/iomanX_irx.o irx/fileXio_irx.o irx/mcman_irx.o irx/mcserv_irx.o
@@ -10,6 +10,9 @@ IRX_OBJS += irx/DEV9_irx.o irx/NETMAN_irx.o irx/SMAP_irx.o irx/PS2IP_irx.o irx/P
 
 # HDD interno: ATAD + APA + PFS
 IRX_OBJS += irx/PS2ATAD_irx.o irx/PS2HDD_irx.o irx/PS2FS_irx.o
+
+# HDLoader: gravacao dos dados do jogo (modulo proprio, iop/hdlwrite)
+IRX_OBJS += irx/HDLWRITE_irx.o
 
 # USB: pilha USB + BDM + FAT (massN:)
 IRX_OBJS += irx/USBD_irx.o irx/BDM_irx.o irx/BDMFS_FATFS_irx.o irx/USBMASS_BD_irx.o
@@ -67,6 +70,15 @@ irx/PS2HDD_irx.c: $(HDD_HDL_DIR)/ps2hdd-hdl.irx
 	@mkdir -p irx
 	bin2c $< $@ PS2HDD_irx
 
+HDLWRITE_DIR = iop/hdlwrite
+
+$(HDLWRITE_DIR)/hdlwrite.irx: $(wildcard $(HDLWRITE_DIR)/src/*) $(HDLWRITE_DIR)/Makefile
+	$(MAKE) -C $(HDLWRITE_DIR)
+
+irx/HDLWRITE_irx.c: $(HDLWRITE_DIR)/hdlwrite.irx
+	@mkdir -p irx
+	bin2c $< $@ HDLWRITE_irx
+
 irx/PS2FS_irx.c: $(PS2SDK)/iop/irx/ps2fs.irx
 	@mkdir -p irx
 	bin2c $< $@ PS2FS_irx
@@ -91,6 +103,7 @@ clean:
 	rm -f $(EE_BIN) $(EE_OBJS)
 	rm -rf irx
 	$(MAKE) -C $(HDD_HDL_DIR) clean
+	$(MAKE) -C $(HDLWRITE_DIR) clean
 
 include $(PS2SDK)/samples/Makefile.pref
 include $(PS2SDK)/samples/Makefile.eeglobal

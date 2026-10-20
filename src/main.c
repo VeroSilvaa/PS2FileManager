@@ -31,6 +31,7 @@
 #include "hdd.h"
 #include "usb.h"
 #include "iso9660.h"
+#include "hdl.h"
 
 
 
@@ -1917,15 +1918,164 @@ static void draw_hdl_info(void)
         hdl_partitions
     );
 
-    scr_printf("\nA gravacao no HDD sera a proxima etapa.\n");
-    scr_printf("Nada foi alterado.\n\n");
+    scr_printf("\nA gravacao do jogo sera a proxima etapa.\n\n");
 
+    scr_printf("TRIANGULO autoteste de gravacao no HDD\n");
+    scr_printf("          (cria, grava 130 MB, confere e\n");
+    scr_printf("           apaga uma particao de teste)\n");
     scr_printf("O voltar\n");
+}
+
+
+/*
+ * Progresso da gravacao HDL (mesmo estilo do Colar): barra da
+ * fase e barra total (gravar + conferir).
+ */
+static const char *hdl_progress_title = "";
+static clock_t hdl_progress_start;
+static clock_t hdl_progress_last;
+
+static void hdl_progress_draw(
+    int phase,
+    unsigned long long done,
+    unsigned long long total)
+{
+    unsigned long long all_done;
+    unsigned long long all_total;
+    unsigned long long speed;
+    unsigned long elapsed_ms;
+    unsigned long remaining;
+    clock_t now;
+
+    char text_done[24];
+    char text_total[24];
+    char text_speed[24];
+    char text_elapsed[16];
+    char text_remaining[16];
+
+
+    now = clock();
+
+    if (phase == HDL_PHASE_WRITE && done == 0) {
+
+        hdl_progress_start = now;
+
+        scr_clear();
+
+        scr_printf("PS2FileManager\n");
+        scr_printf("===============\n");
+        scr_printf("%-.60s\n", hdl_progress_title);
+
+    } else if (done != 0 &&
+               done < total &&
+               now - hdl_progress_last < CLOCKS_PER_SEC / 5) {
+
+        /*
+         * Ate ~5 atualizacoes por segundo; inicio e fim de
+         * cada fase sempre aparecem.
+         */
+        return;
+    }
+
+    hdl_progress_last = now;
+
+
+    all_total = total * 2ULL;
+    all_done = phase == HDL_PHASE_WRITE ? done : total + done;
+
+    elapsed_ms =
+        (unsigned long)((now - hdl_progress_start) * 1000ULL / CLOCKS_PER_SEC);
+
+    speed =
+        elapsed_ms
+            ? all_done * 1000ULL / elapsed_ms
+            : 0;
+
+    remaining =
+        speed
+            ? (unsigned long)((all_total - all_done) / speed)
+            : 0;
+
+
+    scr_setXY(0, 5);
+
+    scr_printf(
+        "Fase: %-12s\n",
+        phase == HDL_PHASE_WRITE
+            ? "gravando"
+            : "conferindo"
+    );
+
+    draw_progress_bar(
+        7,
+        phase == HDL_PHASE_WRITE ? "Gravar" : "Conferir",
+        done,
+        total
+    );
+
+    format_size(text_done, sizeof(text_done), done);
+    format_size(text_total, sizeof(text_total), total);
+
+    scr_setXY(0, 8);
+
+    scr_printf(
+        "         %s de %s            \n",
+        text_done,
+        text_total
+    );
+
+    draw_progress_bar(
+        10,
+        "Total",
+        all_done,
+        all_total
+    );
+
+    format_size(text_speed, sizeof(text_speed), speed);
+    format_time(text_elapsed, sizeof(text_elapsed), elapsed_ms / 1000);
+    format_time(text_remaining, sizeof(text_remaining), remaining);
+
+    scr_setXY(0, 12);
+
+    scr_printf(
+        "Velocidade: %s/s          \n",
+        text_speed
+    );
+
+    scr_printf(
+        "Tempo: %s | Restante: %s   \n",
+        text_elapsed,
+        text_remaining
+    );
 }
 
 
 static void update_hdl_info(void)
 {
+    if (pressed(PAD_TRIANGLE)) {
+
+        hdl_progress_title =
+            "Autoteste HDL: 130 MB na particao de teste";
+
+        hdl_set_progress(hdl_progress_draw);
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "Autoteste HDL %s: %s",
+            hdl_selftest() == 0 ? "OK" : "FALHOU",
+            hdl_error()
+        );
+
+        hdl_set_progress(NULL);
+
+        printf("FM STATUS: %s\n", status_message);
+
+        hdl_info_open = 0;
+
+        return;
+    }
+
     if (pressed(PAD_CIRCLE) ||
         pressed(PAD_CROSS))
         hdl_info_open = 0;
