@@ -10,6 +10,7 @@
 
 #include "usb.h"
 #include "usbfmt.h"
+#include "bdmcore.h"
 
 #define FATFMT_DEVICE "fatfmt:"
 
@@ -20,13 +21,15 @@ int usbfmt_ready(void)
 }
 
 
-int usbfmt_list(fatfmt_disk_t *disks, int max)
+/*
+ * Todos os discos do fatfmt ("usb" e "ata"), so do tipo 'name'.
+ */
+static int fatfmt_list_by_name(const char *name, fatfmt_disk_t *disks, int max)
 {
     static fatfmt_disk_t buffer[FATFMT_MAX_DISKS] __attribute__((aligned(64)));
     int result;
-
-    if (!usbfmt_ready())
-        return -ENODEV;
+    int count = 0;
+    int i;
 
     result = fileXioDevctl(FATFMT_DEVICE, FATFMT_DEVCTL_LIST, NULL, 0, buffer, sizeof(buffer));
 
@@ -35,12 +38,38 @@ int usbfmt_list(fatfmt_disk_t *disks, int max)
     if (result < 0)
         return result;
 
-    if (result > max)
-        result = max;
+    for (i = 0; i < result && count < max; i++) {
 
-    memcpy(disks, buffer, result * sizeof(fatfmt_disk_t));
+        if (strcmp(buffer[i].name, name) == 0)
+            disks[count++] = buffer[i];
+    }
 
-    return result;
+    return count;
+}
+
+
+int usbfmt_list(fatfmt_disk_t *disks, int max)
+{
+    if (!usbfmt_ready())
+        return -ENODEV;
+
+    return fatfmt_list_by_name("usb", disks, max);
+}
+
+
+int usbfmt_hdd_disk(fatfmt_disk_t *disk)
+{
+    int result;
+
+    if (!bdm_fatfmt_load())
+        return -ENODEV;
+
+    result = fatfmt_list_by_name("ata", disk, 1);
+
+    if (result == 0)
+        return -ENODEV;
+
+    return result < 0 ? result : 0;
 }
 
 
@@ -96,8 +125,10 @@ unsigned int usbfmt_size_mb(const fatfmt_disk_t *disk)
 const char *usbfmt_table_name(unsigned int table)
 {
     switch (table) {
-        case FATFMT_TABLE_MBR: return "MBR";
-        case FATFMT_TABLE_GPT: return "GPT";
+        case FATFMT_TABLE_MBR:   return "MBR";
+        case FATFMT_TABLE_GPT:   return "GPT";
+        case FATFMT_TABLE_APA:   return "APA";
+        case FATFMT_TABLE_EMPTY: return "vazio";
     }
 
     return "sem tabela";
@@ -131,6 +162,9 @@ const char *usbfmt_error_text(int code)
 
     if (code == FATFMT_ERR_IO)
         return "erro de leitura/gravacao";
+
+    if (code == FATFMT_ERR_READ_ONLY)
+        return "HDD: formatar FAT ainda nao liberado";
 
     if (code == FATFMT_ERR_FATFS + 14)
         return "FatFs: tamanho invalido para este formato";

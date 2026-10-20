@@ -8,6 +8,9 @@
  */
 
 /*
+ * Discos: "usb" (pendrive) e "ata" (HDD interno, com ata_bd.irx).
+ * No "ata" so a leitura (LIST) e permitida por enquanto.
+ *
  * LIST: buf = fatfmt_disk_t[FATFMT_MAX_DISKS]; devolve quantos.
  * TABLE: arg = fatfmt_request_t (value = FATFMT_TABLE_*): cria a
  *        tabela com uma particao no disco inteiro. APAGA TUDO.
@@ -20,9 +23,11 @@
 
 #define FATFMT_MAX_DISKS        8
 
-#define FATFMT_TABLE_NONE       0
+#define FATFMT_TABLE_NONE       0   /* dados nao reconhecidos */
 #define FATFMT_TABLE_MBR        1
 #define FATFMT_TABLE_GPT        2
+#define FATFMT_TABLE_APA        3   /* HDD do PS2 ("APA" no setor 0) */
+#define FATFMT_TABLE_EMPTY      4   /* setores 0 e 1 zerados */
 
 #define FATFMT_FS_NONE          0
 #define FATFMT_FS_FAT           1   /* FAT12/FAT16 */
@@ -35,6 +40,7 @@
 #define FATFMT_ERR_NO_PARTITION 1001   /* FORMAT sem tabela/particao */
 #define FATFMT_ERR_TOO_SMALL    1002
 #define FATFMT_ERR_IO           1003
+#define FATFMT_ERR_READ_ONLY    1004   /* disco "ata": so LIST */
 #define FATFMT_ERR_FATFS        1100
 
 typedef struct {

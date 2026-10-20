@@ -1,6 +1,6 @@
 EE_BIN = PS2FileManager.elf
 
-EE_OBJS = src/main.o src/memorycard.o src/filemanager.o src/clipboard.o src/fm_fileio.o src/network.o src/smb.o src/dev9.o src/hdd.o src/usb.o src/iso9660.o src/hdl.o src/osk.o src/config.o src/settings.o src/usbfmt.o
+EE_OBJS = src/main.o src/memorycard.o src/filemanager.o src/clipboard.o src/fm_fileio.o src/network.o src/smb.o src/dev9.o src/hdd.o src/usb.o src/iso9660.o src/hdl.o src/osk.o src/config.o src/settings.o src/usbfmt.o src/bdmcore.o
 
 # Modulos IOP do PS2SDK embutidos no ELF (mesmo modelo do wLaunchELF)
 IRX_OBJS = irx/iomanX_irx.o irx/fileXio_irx.o irx/mcman_irx.o irx/mcserv_irx.o
@@ -8,7 +8,7 @@ IRX_OBJS = irx/iomanX_irx.o irx/fileXio_irx.o irx/mcman_irx.o irx/mcserv_irx.o
 # Rede + SMB (mesmos modulos e nomes de simbolo do PS2DVDPlayer)
 IRX_OBJS += irx/DEV9_irx.o irx/NETMAN_irx.o irx/SMAP_irx.o irx/PS2IP_irx.o irx/PS2IPS_irx.o irx/SMBMAN_irx.o
 
-# HDD interno: ATAD + APA + PFS
+# HDD interno: ATAD (ata_bd) + APA + PFS
 IRX_OBJS += irx/PS2ATAD_irx.o irx/PS2HDD_irx.o irx/PS2FS_irx.o
 
 # HDLoader: gravacao dos dados do jogo (modulo proprio, iop/hdlwrite)
@@ -58,7 +58,9 @@ irx/SMBMAN_irx.c: $(PS2SDK)/iop/irx/smbman.irx
 	@mkdir -p irx
 	bin2c $< $@ SMBMAN_irx
 
-irx/PS2ATAD_irx.c: $(PS2SDK)/iop/irx/ps2atad.irx
+# ATAD com BDM (o HDD tambem aparece como disco "ata" no BDM): permite
+# conferir os setores 0-1 antes de carregar o driver APA, como o OPL.
+irx/PS2ATAD_irx.c: $(PS2SDK)/iop/irx/ata_bd.irx
 	@mkdir -p irx
 	bin2c $< $@ PS2ATAD_irx
 

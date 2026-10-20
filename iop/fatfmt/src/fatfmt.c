@@ -279,7 +279,17 @@ static int is_supported_disk(struct block_device *bd)
            bd->parNr == 0 &&
            bd->sectorSize == SECTOR_SIZE &&
            bd->name != NULL &&
-           strcmp(bd->name, "usb") == 0;
+           (strcmp(bd->name, "usb") == 0 || strcmp(bd->name, "ata") == 0);
+}
+
+
+/*
+ * HDD interno ("ata", ata_bd.irx): por enquanto so leitura (LIST),
+ * para decidir se o driver APA pode ser carregado.
+ */
+static int is_read_only_disk(struct block_device *bd)
+{
+    return strcmp(bd->name, "ata") == 0;
 }
 
 static struct block_device *find_disk(const fatfmt_request_t *req)
@@ -343,6 +353,24 @@ static int read_layout(struct block_device *bd, unsigned int *table, u64 *start,
 
     if (result < 0)
         return result;
+
+
+    /*
+     * HDD do PS2: cabecalho APA no setor 0 ("APA" no offset 4,
+     * mesmo teste do OPL). Disco zerado: sem nada a proteger.
+     */
+    if (memcmp(sector + 4, "APA", 3) == 0) {
+        *table = FATFMT_TABLE_APA;
+        return 0;
+    }
+
+    for (j = 0; j < 2 * SECTOR_SIZE && sector[j] == 0; j++)
+        ;
+
+    if (j == 2 * SECTOR_SIZE) {
+        *table = FATFMT_TABLE_EMPTY;
+        return 0;
+    }
 
 
     if (memcmp(sector + SECTOR_SIZE, "EFI PART", 8) == 0) {
@@ -639,6 +667,9 @@ static int devctl_table(const fatfmt_request_t *req)
     if (!bd)
         return -ENODEV;
 
+    if (is_read_only_disk(bd))
+        return -FATFMT_ERR_READ_ONLY;
+
     total = bd->sectorCount;
 
     if (total < PART_START + 2 * 2048)
@@ -696,6 +727,9 @@ static int devctl_format(const fatfmt_request_t *req)
 
     if (!bd)
         return -ENODEV;
+
+    if (is_read_only_disk(bd))
+        return -FATFMT_ERR_READ_ONLY;
 
     result = read_layout(bd, &table, &start, &count, &fs);
 

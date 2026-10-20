@@ -16,6 +16,8 @@
 
 #include "dev9.h"
 #include "hdd.h"
+#include "bdmcore.h"
+#include "usbfmt.h"
 
 /*
  * Baseado no hdd.c do PS2DVDPlayer (DEV9 -> ATAD -> HDD -> PFS).
@@ -58,6 +60,14 @@ typedef struct {
 static HddSlot slots[HDD_SLOTS];
 
 static int hdd_ready = 0;
+static int atad_loaded = 0;
+
+/*
+ * Tabela FATFMT_TABLE_* do disco quando ele nao e APA (0 = APA ou
+ * ainda nao verificado).
+ */
+static int hdd_not_apa = 0;
+static int hdd_table = -1;
 static unsigned int use_counter = 0;
 
 static char last_error[128];
@@ -111,6 +121,48 @@ static int hdd_load(const char *name, void *buffer, unsigned int size, int arg_l
 }
 
 
+static int hdd_check_layout(void)
+{
+    fatfmt_disk_t disk;
+    int result;
+
+    result = usbfmt_hdd_disk(&disk);
+
+    if (result < 0) {
+        hdd_set_error("HDD nao encontrado no BDM (ata_bd/fatfmt)", result);
+        return -6;
+    }
+
+    hdd_table = disk.table;
+
+    printf(
+        "HDD: setores 0-1: %s, %u MB\n",
+        usbfmt_table_name(disk.table),
+        usbfmt_size_mb(&disk)
+    );
+
+    if (disk.table == FATFMT_TABLE_APA || disk.table == FATFMT_TABLE_EMPTY)
+        return 0;
+
+    hdd_not_apa = disk.table == FATFMT_TABLE_NONE ? 99 : (int)disk.table;
+
+    hdd_set_error(
+        disk.table == FATFMT_TABLE_NONE
+            ? "HDD com dados desconhecidos: driver APA nao carregado"
+            : "HDD nao e APA (MBR/GPT/exFAT?): driver APA nao carregado",
+        hdd_not_apa
+    );
+
+    return -5;
+}
+
+
+int hdd_layout_table(void)
+{
+    return hdd_table;
+}
+
+
 int hdd_init(void)
 {
     int result;
@@ -129,20 +181,56 @@ int hdd_init(void)
     }
 
 
-    result = dev9_load();
-
-    if (result < 0) {
-        hdd_set_error("DEV9 falhou", result);
-        return -1;
+    /*
+     * Disco ja visto como nao-APA: o driver APA nunca e carregado.
+     */
+    if (hdd_not_apa) {
+        hdd_set_error("HDD nao e APA (MBR/GPT/exFAT?): driver APA nao carregado", hdd_not_apa);
+        return -5;
     }
 
 
-    result = hdd_load("PS2ATAD", PS2ATAD_irx, size_PS2ATAD_irx, 0, NULL);
+    if (!atad_loaded) {
 
-    if (result < 0) {
-        hdd_set_error("ATAD falhou (sem HDD?)", result);
-        return -2;
+        result = dev9_load();
+
+        if (result < 0) {
+            hdd_set_error("DEV9 falhou", result);
+            return -1;
+        }
+
+
+        /*
+         * ata_bd.irx: o ATAD do PS2SDK com BDM (mesma biblioteca
+         * "atad" para o driver APA). Precisa do BDM carregado.
+         */
+        result = bdm_core_load();
+
+        if (result < 0) {
+            hdd_set_error("BDM falhou", result);
+            return -1;
+        }
+
+        result = hdd_load("ATA_BD", PS2ATAD_irx, size_PS2ATAD_irx, 0, NULL);
+
+        if (result < 0) {
+            hdd_set_error("ATAD falhou (sem HDD?)", result);
+            return -2;
+        }
+
+        atad_loaded = 1;
     }
+
+
+    /*
+     * Como o OPL: o driver APA grava no disco ao iniciar. So
+     * carrega se os setores 0-1 forem APA ou zerados; MBR/GPT
+     * (exFAT do OPL) ou dados desconhecidos ficam intactos.
+     */
+    result = hdd_check_layout();
+
+    if (result < 0)
+        return result;
 
 
     result = hdd_load("PS2HDD", PS2HDD_irx, size_PS2HDD_irx, sizeof(ps2hdd_args), ps2hdd_args);

@@ -9,6 +9,7 @@
 #include <loadfile.h>
 
 #include "usb.h"
+#include "bdmcore.h"
 
 /*
  * Mesma ordem de carga do OPL/wLaunchELF:
@@ -24,20 +25,10 @@
 extern unsigned char USBD_irx[];
 extern unsigned int size_USBD_irx;
 
-extern unsigned char BDM_irx[];
-extern unsigned int size_BDM_irx;
-
-extern unsigned char BDMFS_FATFS_irx[];
-extern unsigned int size_BDMFS_FATFS_irx;
-
 extern unsigned char USBMASS_BD_irx[];
 extern unsigned int size_USBMASS_BD_irx;
 
-extern unsigned char FATFMT_irx[];
-extern unsigned int size_FATFMT_irx;
-
 static int usb_loaded = 0;
-static int fatfmt_loaded = 0;
 
 static char last_error[128];
 
@@ -147,19 +138,14 @@ int usb_init(void)
     }
 
 
-    result = usb_load("BDM", BDM_irx, size_BDM_irx);
+    /*
+     * BDM + bdmfs_fatfs: compartilhados com o HDD (ata_bd).
+     */
+    result = bdm_core_load();
 
     if (result < 0) {
-        usb_set_error("BDM falhou", result);
+        usb_set_error("BDM/BDMFS_FATFS falhou", result);
         return -2;
-    }
-
-
-    result = usb_load("BDMFS_FATFS", BDMFS_FATFS_irx, size_BDMFS_FATFS_irx);
-
-    if (result < 0) {
-        usb_set_error("BDMFS_FATFS falhou", result);
-        return -3;
     }
 
 
@@ -227,10 +213,7 @@ int usb_wait_mount(void)
  */
 int usb_format_loaded(void)
 {
-    if (!fatfmt_loaded && usb_loaded)
-        fatfmt_loaded = usb_load("FATFMT", FATFMT_irx, size_FATFMT_irx) == 0;
-
-    return fatfmt_loaded;
+    return usb_loaded && bdm_fatfmt_load();
 }
 
 

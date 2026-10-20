@@ -10,7 +10,17 @@
  *                    ao navegar em outros dispositivos)
  */
 
+/*
+ * Carrega DEV9 + ata_bd (ATAD com BDM), confere os setores 0-1
+ * (como o OPL) e so entao o driver APA + PFS. Disco MBR/GPT ou
+ * desconhecido: -5, nada e gravado e o APA nunca e carregado.
+ */
 int hdd_init(void);
+
+/*
+ * Tabela vista nos setores 0-1 (FATFMT_TABLE_*), -1 se nao lida.
+ */
+int hdd_layout_table(void);
 
 /*
  * Monta (ou reutiliza) a particao e devolve o ponto de

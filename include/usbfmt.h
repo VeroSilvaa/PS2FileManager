@@ -18,6 +18,12 @@ int usbfmt_ready(void);
 int usbfmt_list(fatfmt_disk_t *disks, int max);
 
 /*
+ * HDD interno visto pelo BDM (ata_bd.irx): tabela atual lida dos
+ * setores 0-1, sem gravar nada. 0 = ok, < 0 = sem HDD/fatfmt.
+ */
+int usbfmt_hdd_disk(fatfmt_disk_t *disk);
+
+/*
  * Cria a tabela (FATFMT_TABLE_MBR/GPT) com uma particao no disco
  * inteiro. APAGA TUDO. 0 = ok.
  */
