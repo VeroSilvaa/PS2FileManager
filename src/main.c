@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "memorycard.h"
 #include "filemanager.h"
@@ -71,7 +72,7 @@ typedef enum {
 
 static const char *operation_menu[MENU_ITEM_COUNT] = {
     "Copiar",
-    "Mover [desativado]",
+    "Recortar (mover)",
     "Colar",
     "Renomear [desativado]",
     "Excluir",
@@ -97,7 +98,16 @@ static int mc1_available = 0;
 
 static int operation_menu_open = 0;
 
-static int delete_confirm_open = 0;
+/*
+ * Confirmacao em tela cheia (Etapa 4).
+ */
+typedef enum {
+    CONFIRM_NONE = 0,
+    CONFIRM_DELETE,
+    CONFIRM_MOVE
+} ConfirmAction;
+
+static ConfirmAction confirm_action = CONFIRM_NONE;
 static int operation_menu_cursor = 0;
 
 static char status_message[256];
@@ -482,15 +492,81 @@ static void copy_selection(void)
 
 
 /* ============================================================
- * Colar clipboard
+ * Arquivos de sistema dos saves
  * ============================================================ */
 
-static void paste_clipboard(void)
+/*
+ * icon.sys / *.icn / *.ico formam o icone do save e
+ * B?DATA-SYSTEM e criada pela BIOS. Apagar ou mover
+ * esses itens pode deixar o save "corrompido".
+ */
+static int is_system_name(const char *name)
+{
+    size_t length;
+
+    if (!name)
+        return 0;
+
+    length = strlen(name);
+
+    if (strcasecmp(name, "icon.sys") == 0)
+        return 1;
+
+    if (length > 4 &&
+        (strcasecmp(name + length - 4, ".icn") == 0 ||
+         strcasecmp(name + length - 4, ".ico") == 0))
+        return 1;
+
+    if (length == 13 &&
+        name[0] == 'B' &&
+        strcmp(name + 2, "DATA-SYSTEM") == 0)
+        return 1;
+
+    return 0;
+}
+
+
+static int selection_has_system(void)
+{
+    int i;
+
+    for (i = 0; i < file_manager.count; i++) {
+
+        if (file_manager.entries[i].selected &&
+            is_system_name(file_manager.entries[i].name))
+            return 1;
+    }
+
+    return 0;
+}
+
+
+static int clipboard_has_system(void)
+{
+    int i;
+
+    for (i = 0; i < clipboard.count; i++) {
+
+        if (is_system_name(
+                path_filename(clipboard.paths[i])))
+            return 1;
+    }
+
+    return 0;
+}
+
+
+/* ============================================================
+ * Executa Colar (copiar ou mover)
+ * ============================================================ */
+
+static void run_paste(void)
 {
     int i;
     int result;
-
-    int copied;
+    int done;
+    int length;
+    int move;
 
     char destination[
         FM_MAX_PATH
@@ -499,30 +575,13 @@ static void paste_clipboard(void)
     const char *source;
 
     FileCopyStatus copy_status;
+    FileDeleteStatus delete_status;
 
 
-    if (clipboard.mode ==
-        CLIPBOARD_NONE) {
+    move =
+        clipboard.mode == CLIPBOARD_MOVE;
 
-        set_status(
-            "Clipboard vazio."
-        );
-
-        return;
-    }
-
-
-    if (clipboard.count <= 0) {
-
-        set_status(
-            "Clipboard vazio."
-        );
-
-        return;
-    }
-
-
-    copied = 0;
+    done = 0;
 
 
     for (i = 0;
@@ -533,16 +592,6 @@ static void paste_clipboard(void)
             clipboard.paths[i];
 
 
-        /*
-         * Nesta primeira versão da nova camada
-         * estamos testando apenas arquivos comuns.
-         *
-         * O suporte recursivo a diretórios será
-         * implementado depois que a cópia simples
-         * estiver comprovadamente funcionando.
-         */
-
-
         if (!build_destination_path(
                 file_manager.current_path,
                 source,
@@ -551,6 +600,36 @@ static void paste_clipboard(void)
 
             set_status(
                 "Falha ao montar destino."
+            );
+
+            return;
+        }
+
+
+        /*
+         * Pasta dentro dela mesma (ex.: mc0:/OPL ->
+         * mc0:/OPL/OPL) geraria recursao sem fim.
+         */
+        length = strlen(source);
+
+        if (strncmp(destination, source, length) == 0 &&
+            destination[length] == '/') {
+
+            snprintf(
+                status_message,
+                sizeof(status_message),
+                "ERRO: destino dentro da origem (%s)",
+                path_filename(source)
+            );
+
+            printf(
+                "FM PASTE: recusado, %s dentro de %s\n",
+                destination,
+                source
+            );
+
+            fm_refresh(
+                &file_manager
             );
 
             return;
@@ -588,6 +667,7 @@ static void paste_clipboard(void)
             copy_status.directories_created
         );
 
+
         if (result !=
             FILEIO_COPY_OK) {
 
@@ -603,17 +683,10 @@ static void paste_clipboard(void)
                 )
             );
 
-
             /*
-             * IMPORTANTE:
-             *
-             * Não apagamos automaticamente nenhum
-             * arquivo em caso de falha.
-             *
-             * Isso é intencional enquanto estamos
-             * validando a nova camada de I/O.
+             * Nao apagamos nada em caso de falha:
+             * nem o destino parcial, nem a origem.
              */
-
             fm_refresh(
                 &file_manager
             );
@@ -622,26 +695,125 @@ static void paste_clipboard(void)
         }
 
 
-        copied++;
+        /*
+         * MOVER: a origem so e excluida depois da
+         * copia verificada byte a byte.
+         */
+        if (move) {
+
+            result =
+                fileio_delete(
+                    source,
+                    &delete_status
+                );
+
+
+            printf(
+                "FM MOVE: %s | origem %s | err %d | sys %d | arquivos %d | pastas %d\n",
+                source,
+                delete_status.stage,
+                delete_status.error,
+                delete_status.system_result,
+                delete_status.files_deleted,
+                delete_status.directories_deleted
+            );
+
+
+            if (result !=
+                FILEIO_COPY_OK) {
+
+                snprintf(
+                    status_message,
+                    sizeof(status_message),
+                    "COPIADO, mas origem NAO excluida: %s",
+                    fileio_error_string(
+                        delete_status.error
+                    )
+                );
+
+                fm_refresh(
+                    &file_manager
+                );
+
+                return;
+            }
+        }
+
+
+        done++;
     }
 
 
-    /*
-     * Atualiza diretório depois da cópia.
-     */
     fm_refresh(
         &file_manager
     );
 
 
-    snprintf(
-        status_message,
-        sizeof(status_message),
-        "COPIA VERIFICADA: %d item(ns)",
-        copied
-    );
+    if (move) {
+
+        /*
+         * Os itens nao existem mais na origem.
+         */
+        clipboard_clear(
+            &clipboard
+        );
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "MOVIDO: %d item(ns)",
+            done
+        );
+
+    } else {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "COPIA VERIFICADA: %d item(ns)",
+            done
+        );
+    }
 }
 
+
+/* ============================================================
+ * Colar clipboard
+ * ============================================================ */
+
+static void paste_clipboard(void)
+{
+    if (clipboard.mode ==
+            CLIPBOARD_NONE ||
+        clipboard.count <= 0) {
+
+        set_status(
+            "Clipboard vazio."
+        );
+
+        return;
+    }
+
+
+    /*
+     * Mover exclui a origem: pede confirmacao.
+     */
+    if (clipboard.mode ==
+        CLIPBOARD_MOVE) {
+
+        confirm_action =
+            CONFIRM_MOVE;
+
+        set_status(
+            "Confirme a movimentacao."
+        );
+
+        return;
+    }
+
+
+    run_paste();
+}
 
 /* ============================================================
  * Menu de operações
@@ -672,11 +844,30 @@ static void execute_operation_menu(void)
          */
         case 1:
 
-            set_status(
-                "Mover ainda esta desativado."
-            );
-
             operation_menu_open = 0;
+
+            /*
+             * Recortar: so marca os itens. Nada e apagado
+             * antes do Colar + confirmacao + copia verificada.
+             */
+            if (clipboard_from_selection(
+                    &clipboard,
+                    &file_manager,
+                    CLIPBOARD_MOVE) <= 0) {
+
+                set_status(
+                    "Nenhum item selecionado."
+                );
+
+                break;
+            }
+
+            snprintf(
+                status_message,
+                sizeof(status_message),
+                "%d item(ns) para mover. Abra o destino e Colar.",
+                clipboard.count
+            );
 
             break;
 
@@ -727,7 +918,7 @@ static void execute_operation_menu(void)
             /*
              * Nada e apagado aqui: so abre a confirmacao.
              */
-            delete_confirm_open = 1;
+            confirm_action = CONFIRM_DELETE;
 
             set_status(
                 "Confirme a exclusao."
@@ -787,7 +978,7 @@ static void execute_operation_menu(void)
 
 
 /* ============================================================
- * Exclusao (Etapa 4a)
+ * Exclusao e confirmacao (Etapa 4)
  * ============================================================ */
 
 static void delete_selection(void)
@@ -889,42 +1080,81 @@ static void delete_selection(void)
 }
 
 
-static void update_delete_confirm(void)
+static int confirm_has_system(void)
 {
-    if (pressed(PAD_CROSS)) {
+    if (confirm_action == CONFIRM_DELETE)
+        return selection_has_system();
 
-        delete_confirm_open = 0;
+    return clipboard_has_system();
+}
 
-        delete_selection();
+
+static void update_confirm(void)
+{
+    ConfirmAction action;
+    int has_system;
+
+
+    if (pressed(PAD_CIRCLE)) {
+
+        confirm_action = CONFIRM_NONE;
+
+        set_status(
+            "Operacao cancelada."
+        );
 
         return;
     }
 
 
-    if (pressed(PAD_CIRCLE)) {
+    /*
+     * Com arquivos de sistema do save, so TRIANGULO
+     * confirma (evita confirmar no reflexo com X).
+     */
+    has_system =
+        confirm_has_system();
 
-        delete_confirm_open = 0;
+
+    if (has_system &&
+        pressed(PAD_CROSS)) {
 
         set_status(
-            "Exclusao cancelada."
+            "Arquivos de sistema: use TRIANGULO para confirmar."
         );
+
+        return;
+    }
+
+
+    if (( has_system && pressed(PAD_TRIANGLE)) ||
+        (!has_system && pressed(PAD_CROSS))) {
+
+        action = confirm_action;
+
+        confirm_action = CONFIRM_NONE;
+
+        if (action == CONFIRM_DELETE)
+            delete_selection();
+        else
+            run_paste();
 
         return;
     }
 }
 
 
-static void draw_delete_confirm(void)
+static void draw_confirm(void)
 {
     int i;
     int shown;
-    int selected;
+    int total;
+    int has_system;
+
+    const char *name;
 
 
-    selected =
-        fm_selected_count(
-            &file_manager
-        );
+    has_system =
+        confirm_has_system();
 
 
     scr_printf(
@@ -935,53 +1165,140 @@ static void draw_delete_confirm(void)
         "===============\n\n"
     );
 
-    scr_printf(
-        "EXCLUIR %d ITEM(NS)?\n\n",
-        selected
-    );
+
+    if (confirm_action == CONFIRM_DELETE) {
+
+        total =
+            fm_selected_count(
+                &file_manager
+            );
+
+        scr_printf(
+            "EXCLUIR %d ITEM(NS)?\n\n",
+            total
+        );
+
+    } else {
+
+        total =
+            clipboard.count;
+
+        scr_printf(
+            "MOVER %d ITEM(NS) PARA:\n  %s\n\n",
+            total,
+            file_manager.current_path
+        );
+    }
 
 
     shown = 0;
 
-    for (i = 0;
-         i < file_manager.count && shown < 12;
-         i++) {
 
-        if (!file_manager.entries[i].selected)
-            continue;
+    if (confirm_action == CONFIRM_DELETE) {
 
-        scr_printf(
-            "  %s%s\n",
-            file_manager.entries[i].is_dir
-                ? "<DIR> "
-                : "",
-            file_manager.entries[i].name
-        );
+        for (i = 0;
+             i < file_manager.count && shown < 10;
+             i++) {
 
-        shown++;
+            if (!file_manager.entries[i].selected)
+                continue;
+
+            name =
+                file_manager.entries[i].name;
+
+            scr_printf(
+                "  %s%s%s\n",
+                file_manager.entries[i].is_dir
+                    ? "<DIR> "
+                    : "",
+                name,
+                is_system_name(name)
+                    ? "  [SISTEMA]"
+                    : ""
+            );
+
+            shown++;
+        }
+
+    } else {
+
+        for (i = 0;
+             i < clipboard.count && shown < 10;
+             i++) {
+
+            name =
+                path_filename(
+                    clipboard.paths[i]
+                );
+
+            scr_printf(
+                "  %s%s\n",
+                name,
+                is_system_name(name)
+                    ? "  [SISTEMA]"
+                    : ""
+            );
+
+            shown++;
+        }
     }
 
 
-    if (selected > shown) {
+    if (total > shown) {
 
         scr_printf(
             "  ... e mais %d\n",
-            selected - shown
+            total - shown
         );
     }
 
 
-    scr_printf(
-        "\nPastas sao excluidas com todo o conteudo.\n"
-    );
+    if (confirm_action == CONFIRM_DELETE) {
 
-    scr_printf(
-        "Esta operacao NAO pode ser desfeita.\n\n"
-    );
+        scr_printf(
+            "\nPastas sao excluidas com todo o conteudo.\n"
+        );
 
-    scr_printf(
-        "X confirmar | O cancelar\n"
-    );
+        scr_printf(
+            "Esta operacao NAO pode ser desfeita.\n"
+        );
+
+    } else {
+
+        scr_printf(
+            "\nA origem so e excluida depois da copia\n"
+        );
+
+        scr_printf(
+            "verificada byte a byte.\n"
+        );
+    }
+
+
+    if (has_system) {
+
+        scr_printf(
+            "\nATENCAO: inclui arquivos de SISTEMA do save\n"
+        );
+
+        scr_printf(
+            "(icon.sys, .icn, B?DATA-SYSTEM).\n"
+        );
+
+        scr_printf(
+            "O save pode ficar corrompido.\n\n"
+        );
+
+        scr_printf(
+            "TRIANGULO confirmar | O cancelar\n"
+        );
+
+    } else {
+
+        scr_printf(
+            "\nX confirmar | O cancelar\n"
+        );
+    }
 }
 
 
@@ -1086,9 +1403,9 @@ static void update_file_screen(void)
     int selected;
 
 
-    if (delete_confirm_open) {
+    if (confirm_action != CONFIRM_NONE) {
 
-        update_delete_confirm();
+        update_confirm();
 
         return;
     }
@@ -1394,11 +1711,11 @@ static void draw_file_screen(void)
 
 
     /*
-     * Confirmacao de exclusao ocupa a tela inteira.
+     * Confirmacao (excluir/mover) ocupa a tela inteira.
      */
-    if (delete_confirm_open) {
+    if (confirm_action != CONFIRM_NONE) {
 
-        draw_delete_confirm();
+        draw_confirm();
 
         return;
     }
