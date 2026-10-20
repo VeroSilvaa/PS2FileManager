@@ -24,6 +24,18 @@ int usb_available(int unit);
 
 int usb_ready(void);
 
+/*
+ * Carrega o fatfmt.irx (formatacao) na primeira chamada, com a
+ * pilha USB ja carregada. 1 = disponivel.
+ */
+int usb_format_loaded(void);
+
+/*
+ * Depois de mudar tabela/formato: espera o BDM montar de novo
+ * (ate USB_WAIT_SECONDS). Devolve quantas unidades montaram.
+ */
+int usb_wait_mount(void);
+
 const char *usb_error(void);
 
 #endif

@@ -33,7 +33,11 @@ extern unsigned int size_BDMFS_FATFS_irx;
 extern unsigned char USBMASS_BD_irx[];
 extern unsigned int size_USBMASS_BD_irx;
 
+extern unsigned char FATFMT_irx[];
+extern unsigned int size_FATFMT_irx;
+
 static int usb_loaded = 0;
+static int fatfmt_loaded = 0;
 
 static char last_error[128];
 
@@ -124,8 +128,6 @@ static int usb_count_available(void)
 
 int usb_init(void)
 {
-    clock_t start;
-    clock_t tick;
     int result;
     int count;
 
@@ -172,6 +174,22 @@ int usb_init(void)
     usb_loaded = 1;
 
 
+    count = usb_wait_mount();
+
+    if (count == 0)
+        usb_set_error("Nenhum pendrive encontrado", 0);
+
+    return 0;
+}
+
+
+int usb_wait_mount(void)
+{
+    clock_t start;
+    clock_t tick;
+    int count;
+
+
     /*
      * Espera todas as unidades ou o tempo limite
      * (com um so pendrive, a espera vai ate o fim).
@@ -194,15 +212,25 @@ int usb_init(void)
 
 
     printf(
-        "USB: pilha pronta, %d unidade(s) em %d ms\n",
+        "USB: %d unidade(s) montada(s) em %d ms\n",
         count,
         (int)((clock() - start) * 1000 / CLOCKS_PER_SEC)
     );
 
-    if (count == 0)
-        usb_set_error("Nenhum pendrive encontrado", 0);
+    return count;
+}
 
-    return 0;
+
+/*
+ * Formatacao (modulo proprio, iop/fatfmt): carregado so quando
+ * o usuario pede para formatar, depois dos pendrives montados.
+ */
+int usb_format_loaded(void)
+{
+    if (!fatfmt_loaded && usb_loaded)
+        fatfmt_loaded = usb_load("FATFMT", FATFMT_irx, size_FATFMT_irx) == 0;
+
+    return fatfmt_loaded;
 }
 
 

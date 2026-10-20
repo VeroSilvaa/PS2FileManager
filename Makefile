@@ -1,6 +1,6 @@
 EE_BIN = PS2FileManager.elf
 
-EE_OBJS = src/main.o src/memorycard.o src/filemanager.o src/clipboard.o src/fm_fileio.o src/network.o src/smb.o src/dev9.o src/hdd.o src/usb.o src/iso9660.o src/hdl.o src/osk.o src/config.o src/settings.o
+EE_OBJS = src/main.o src/memorycard.o src/filemanager.o src/clipboard.o src/fm_fileio.o src/network.o src/smb.o src/dev9.o src/hdd.o src/usb.o src/iso9660.o src/hdl.o src/osk.o src/config.o src/settings.o src/usbfmt.o
 
 # Modulos IOP do PS2SDK embutidos no ELF (mesmo modelo do wLaunchELF)
 IRX_OBJS = irx/iomanX_irx.o irx/fileXio_irx.o irx/mcman_irx.o irx/mcserv_irx.o
@@ -16,6 +16,9 @@ IRX_OBJS += irx/HDLWRITE_irx.o
 
 # USB: pilha USB + BDM + FAT (massN:)
 IRX_OBJS += irx/USBD_irx.o irx/BDM_irx.o irx/BDMFS_FATFS_irx.o irx/USBMASS_BD_irx.o
+
+# Formatacao FAT32/exFAT e tabela MBR/GPT (modulo proprio, iop/fatfmt)
+IRX_OBJS += irx/FATFMT_irx.o
 EE_OBJS += $(IRX_OBJS)
 
 EE_INCS = -I$(PS2SDK)/ee/include -I$(PS2SDK)/common/include -Iinclude
@@ -79,6 +82,15 @@ irx/HDLWRITE_irx.c: $(HDLWRITE_DIR)/hdlwrite.irx
 	@mkdir -p irx
 	bin2c $< $@ HDLWRITE_irx
 
+FATFMT_DIR = iop/fatfmt
+
+$(FATFMT_DIR)/fatfmt.irx: $(wildcard $(FATFMT_DIR)/src/* $(FATFMT_DIR)/fatfs/*) include/fatfmt_devctl.h $(FATFMT_DIR)/Makefile
+	$(MAKE) -C $(FATFMT_DIR)
+
+irx/FATFMT_irx.c: $(FATFMT_DIR)/fatfmt.irx
+	@mkdir -p irx
+	bin2c $< $@ FATFMT_irx
+
 irx/PS2FS_irx.c: $(PS2SDK)/iop/irx/ps2fs.irx
 	@mkdir -p irx
 	bin2c $< $@ PS2FS_irx
@@ -104,6 +116,7 @@ clean:
 	rm -rf irx
 	$(MAKE) -C $(HDD_HDL_DIR) clean
 	$(MAKE) -C $(HDLWRITE_DIR) clean
+	$(MAKE) -C $(FATFMT_DIR) clean
 
 include $(PS2SDK)/samples/Makefile.pref
 include $(PS2SDK)/samples/Makefile.eeglobal

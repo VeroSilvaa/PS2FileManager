@@ -37,6 +37,7 @@
 #include "osk.h"
 #include "config.h"
 #include "settings.h"
+#include "usbfmt.h"
 
 
 
@@ -140,31 +141,51 @@ static int mc1_available = 0;
 static int usb_present[USB_UNITS];
 
 /*
- * Formatacao (R1 na lista de dispositivos). Por enquanto so
- * HDD em APA; FAT32/exFAT dependem de um modulo IOP proprio.
+ * Formatacao (R1 na lista de dispositivos): HDD em APA; pendrive
+ * em FAT32/exFAT com tabela MBR/GPT (fatfmt.irx).
  */
 typedef enum {
     FORMAT_NONE = 0,
+    FORMAT_DISKS,       /* USB: escolher o pendrive */
     FORMAT_MENU,
     FORMAT_CONFIRM,     /* 1a confirmacao: TRIANGULO */
     FORMAT_CONFIRM2     /* 2a confirmacao: START */
 } FormatStep;
 
-#define FORMAT_OPTION_APA    0
-#define FORMAT_OPTION_COUNT  4
+typedef enum {
+    FORMAT_ACT_APA = 0,
+    FORMAT_ACT_FAT32,
+    FORMAT_ACT_EXFAT,
+    FORMAT_ACT_TABLE_MBR,
+    FORMAT_ACT_TABLE_GPT,
+    FORMAT_ACT_SOON,
+    FORMAT_ACT_CANCEL
+} FormatAction;
 
-static const char *format_options[FORMAT_OPTION_COUNT] = {
-    "APA (padrao PS2)",
-    "FAT32 [em breve]",
-    "exFAT [em breve]",
-    "Cancelar"
-};
+#define FORMAT_MAX_OPTIONS  6
 
 static FormatStep format_step = FORMAT_NONE;
 static int format_cursor = 0;
+
+static const char *format_labels[FORMAT_MAX_OPTIONS];
+static FormatAction format_actions[FORMAT_MAX_OPTIONS];
+static int format_option_count;
+static FormatAction format_chosen;
+
+/*
+ * HDD
+ */
 static unsigned int format_total_mb;
 static int format_formatted;
 static int format_partitions;
+
+/*
+ * USB (discos inteiros do BDM)
+ */
+static int format_usb;
+static fatfmt_disk_t format_disks[FATFMT_MAX_DISKS];
+static int format_disk_count;
+static int format_disk;
 
 static int operation_menu_open = 0;
 
@@ -3589,6 +3610,79 @@ static void update_operation_menu(void)
  * Formatacao (lista de dispositivos, R1)
  * ============================================================ */
 
+static void format_add_option(const char *label, FormatAction action)
+{
+    if (format_option_count >= FORMAT_MAX_OPTIONS)
+        return;
+
+    format_labels[format_option_count] = label;
+    format_actions[format_option_count] = action;
+    format_option_count++;
+}
+
+
+static void format_build_menu(void)
+{
+    format_option_count = 0;
+    format_cursor = 0;
+
+    if (!format_usb) {
+
+        format_add_option("APA (padrao PS2)", FORMAT_ACT_APA);
+        format_add_option("FAT32 [em breve]", FORMAT_ACT_SOON);
+        format_add_option("exFAT [em breve]", FORMAT_ACT_SOON);
+
+    } else if (format_disks[format_disk].table == FATFMT_TABLE_NONE) {
+
+        format_add_option("Criar tabela MBR", FORMAT_ACT_TABLE_MBR);
+        format_add_option("Criar tabela GPT", FORMAT_ACT_TABLE_GPT);
+
+    } else {
+
+        format_add_option("Formatar em FAT32", FORMAT_ACT_FAT32);
+        format_add_option("Formatar em exFAT", FORMAT_ACT_EXFAT);
+        format_add_option("Recriar tabela MBR (apaga tudo)", FORMAT_ACT_TABLE_MBR);
+        format_add_option("Recriar tabela GPT (apaga tudo)", FORMAT_ACT_TABLE_GPT);
+    }
+
+    format_add_option("Cancelar", FORMAT_ACT_CANCEL);
+}
+
+
+/*
+ * USB: pilha USB + fatfmt.irx e lista dos pendrives (discos
+ * inteiros, tambem os sem tabela ou sem FAT).
+ */
+static void start_format_usb(void)
+{
+    if (usb_init() < 0 || !usbfmt_ready()) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "Formatacao USB indisponivel: %s",
+            usb_ready() ? "fatfmt.irx nao carregou" : usb_error()
+        );
+
+        return;
+    }
+
+    format_disk_count = usbfmt_list(format_disks, FATFMT_MAX_DISKS);
+
+    if (format_disk_count <= 0) {
+
+        set_status("Nenhum pendrive encontrado.");
+
+        return;
+    }
+
+    format_usb = 1;
+    format_disk = 0;
+    format_cursor = 0;
+    format_step = FORMAT_DISKS;
+}
+
+
 static void start_format(void)
 {
     if (device_cursor == 0 || device_cursor == 1) {
@@ -3607,7 +3701,7 @@ static void start_format(void)
 
     if (device_cursor >= DEVICE_USB0) {
 
-        set_status("Formatar USB (FAT32/exFAT): em breve.");
+        start_format_usb();
 
         return;
     }
@@ -3640,7 +3734,8 @@ static void start_format(void)
         format_partitions
     );
 
-    format_cursor = 0;
+    format_usb = 0;
+    format_build_menu();
     format_step = FORMAT_MENU;
 }
 
@@ -3719,6 +3814,104 @@ static void run_format_apa(void)
 }
 
 
+static const char *format_action_text(FormatAction action)
+{
+    switch (action) {
+        case FORMAT_ACT_APA:       return "formatar em APA";
+        case FORMAT_ACT_FAT32:     return "formatar em FAT32";
+        case FORMAT_ACT_EXFAT:     return "formatar em exFAT";
+        case FORMAT_ACT_TABLE_MBR: return "criar tabela MBR";
+        case FORMAT_ACT_TABLE_GPT: return "criar tabela GPT";
+        default:                   return "";
+    }
+}
+
+
+/*
+ * Pendrive: tabela (uma particao no disco inteiro) ou formatacao
+ * da 1a particao. O BDM desmonta e monta de novo (fatfmt.irx).
+ */
+static void run_format_usb(void)
+{
+    const fatfmt_disk_t *disk = &format_disks[format_disk];
+    int result;
+
+
+    scr_clear();
+
+    scr_printf("PS2FileManager\n");
+    scr_printf("===============\n\n");
+    scr_printf(
+        "%s%u: %s...\n\n",
+        disk->name,
+        disk->dev_nr,
+        format_action_text(format_chosen)
+    );
+    scr_printf("Aguarde. Nao remova o pendrive.\n");
+
+
+    /*
+     * O clipboard pode apontar para o pendrive (massN:).
+     */
+    if (clipboard.count > 0 &&
+        strncmp(clipboard.paths[0], "mass", 4) == 0)
+        clipboard_clear(&clipboard);
+
+
+    if (format_chosen == FORMAT_ACT_TABLE_MBR || format_chosen == FORMAT_ACT_TABLE_GPT)
+        result = usbfmt_table(
+            disk,
+            format_chosen == FORMAT_ACT_TABLE_GPT ? FATFMT_TABLE_GPT : FATFMT_TABLE_MBR
+        );
+    else
+        result = usbfmt_format(
+            disk,
+            format_chosen == FORMAT_ACT_EXFAT ? FATFMT_FS_EXFAT : FATFMT_FS_FAT32
+        );
+
+
+    scr_printf("\nEsperando o pendrive montar de novo...\n");
+
+    usb_wait_mount();
+
+    refresh_devices();
+
+
+    if (result < 0) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "ERRO ao %s: %s (%d)",
+            format_action_text(format_chosen),
+            usbfmt_error_text(result),
+            result
+        );
+
+        return;
+    }
+
+    if (format_chosen == FORMAT_ACT_TABLE_MBR || format_chosen == FORMAT_ACT_TABLE_GPT) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "Tabela %s criada. R1 de novo para formatar em FAT32/exFAT.",
+            format_chosen == FORMAT_ACT_TABLE_GPT ? "GPT" : "MBR"
+        );
+
+    } else {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "Pendrive formatado em %s.",
+            format_chosen == FORMAT_ACT_EXFAT ? "exFAT" : "FAT32"
+        );
+    }
+}
+
+
 static void update_format(void)
 {
     if (pressed(PAD_CIRCLE)) {
@@ -3733,29 +3926,49 @@ static void update_format(void)
 
     switch (format_step) {
 
+        case FORMAT_DISKS:
+
+            if (pressed(PAD_UP) && format_disk > 0)
+                format_disk--;
+
+            if (pressed(PAD_DOWN) && format_disk < format_disk_count - 1)
+                format_disk++;
+
+            if (pressed(PAD_CROSS)) {
+
+                format_build_menu();
+
+                format_step = FORMAT_MENU;
+            }
+
+            break;
+
+
         case FORMAT_MENU:
 
             if (pressed(PAD_UP) && format_cursor > 0)
                 format_cursor--;
 
-            if (pressed(PAD_DOWN) && format_cursor < FORMAT_OPTION_COUNT - 1)
+            if (pressed(PAD_DOWN) && format_cursor < format_option_count - 1)
                 format_cursor++;
 
             if (pressed(PAD_CROSS)) {
 
-                if (format_cursor == FORMAT_OPTION_APA) {
+                format_chosen = format_actions[format_cursor];
 
-                    format_step = FORMAT_CONFIRM;
-
-                } else if (format_cursor == FORMAT_OPTION_COUNT - 1) {
+                if (format_chosen == FORMAT_ACT_CANCEL) {
 
                     format_step = FORMAT_NONE;
 
                     set_status("Formatacao cancelada.");
 
-                } else {
+                } else if (format_chosen == FORMAT_ACT_SOON) {
 
                     set_status("FAT32/exFAT no HDD: em breve.");
+
+                } else {
+
+                    format_step = FORMAT_CONFIRM;
                 }
             }
 
@@ -3776,7 +3989,10 @@ static void update_format(void)
 
                 format_step = FORMAT_NONE;
 
-                run_format_apa();
+                if (format_usb)
+                    run_format_usb();
+                else
+                    run_format_apa();
             }
 
             break;
@@ -3789,9 +4005,103 @@ static void update_format(void)
 }
 
 
+static void draw_format_usb(void)
+{
+    const fatfmt_disk_t *disk;
+    int i;
+
+
+    scr_printf("PS2FileManager\n");
+    scr_printf("===============\n\n");
+
+
+    if (format_step == FORMAT_DISKS) {
+
+        scr_printf("FORMATAR PENDRIVE: escolha o disco\n\n");
+
+        for (i = 0; i < format_disk_count; i++) {
+
+            disk = &format_disks[i];
+
+            scr_printf(
+                "%s %s%u  %6u MB  %-10s %s\n",
+                i == format_disk ? ">" : " ",
+                disk->name,
+                disk->dev_nr,
+                usbfmt_size_mb(disk),
+                usbfmt_table_name(disk->table),
+                usbfmt_fs_name(disk->fs)
+            );
+        }
+
+        scr_printf("\nO numero (usb0, usb1) e o do BDM: pode nao bater\n");
+        scr_printf("com mass0:/mass1: (ordem de montagem).\n\n");
+
+        scr_printf("X escolher | O cancelar\n");
+
+        return;
+    }
+
+
+    disk = &format_disks[format_disk];
+
+    scr_printf("FORMATAR: pendrive %s%u\n\n", disk->name, disk->dev_nr);
+
+    scr_printf("Capacidade : %u MB\n", usbfmt_size_mb(disk));
+    scr_printf("Tabela     : %s\n", usbfmt_table_name(disk->table));
+    scr_printf("Formato    : %s\n\n", usbfmt_fs_name(disk->fs));
+
+
+    if (format_step == FORMAT_MENU) {
+
+        if (disk->table == FATFMT_TABLE_NONE) {
+            scr_printf("Sua midia nao possui tabela de particoes\n");
+            scr_printf("GPT ou MBR. Deseja criar?\n\n");
+        }
+
+        for (i = 0; i < format_option_count; i++)
+            scr_printf("%s %s\n", i == format_cursor ? ">" : " ", format_labels[i]);
+
+        scr_printf("\nX escolher | O cancelar\n");
+
+        return;
+    }
+
+
+    scr_printf("ACAO: %s\n\n", format_action_text(format_chosen));
+
+    if (format_chosen == FORMAT_ACT_TABLE_MBR || format_chosen == FORMAT_ACT_TABLE_GPT) {
+        scr_printf("ATENCAO: TODOS OS DADOS DO PENDRIVE SERAO\n");
+        scr_printf("APAGADOS. Sera criada uma particao no disco\n");
+        scr_printf("inteiro; depois formate em FAT32 ou exFAT.\n\n");
+    } else {
+        scr_printf("ATENCAO: TODOS OS DADOS DA PARTICAO SERAO\n");
+        scr_printf("APAGADOS.\n\n");
+    }
+
+    if (format_step == FORMAT_CONFIRM) {
+
+        scr_printf("TRIANGULO continuar | O cancelar\n");
+
+    } else {
+
+        scr_printf("ULTIMA CONFIRMACAO.\n\n");
+        scr_printf("START EXECUTAR AGORA | O cancelar\n");
+    }
+}
+
+
 static void draw_format(void)
 {
     int i;
+
+
+    if (format_usb) {
+
+        draw_format_usb();
+
+        return;
+    }
 
 
     scr_printf("PS2FileManager\n");
@@ -3808,8 +4118,8 @@ static void draw_format(void)
 
     if (format_step == FORMAT_MENU) {
 
-        for (i = 0; i < FORMAT_OPTION_COUNT; i++)
-            scr_printf("%s %s\n", i == format_cursor ? ">" : " ", format_options[i]);
+        for (i = 0; i < format_option_count; i++)
+            scr_printf("%s %s\n", i == format_cursor ? ">" : " ", format_labels[i]);
 
         scr_printf("\n%s\n\n", status_message);
 
@@ -4312,7 +4622,7 @@ static void draw_device_screen(void)
     );
 
     scr_printf(
-        "R1       Formatar (HDD)\n"
+        "R1       Formatar (HDD/USB)\n"
     );
 
 
