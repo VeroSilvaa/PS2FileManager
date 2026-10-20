@@ -1926,6 +1926,34 @@ static void draw_file_screen(void)
     }
 
 
+    /*
+     * Menu R1 tambem em tela propria: desenhado abaixo da
+     * lista ele saia da area visivel em pastas com muitos itens.
+     */
+    if (operation_menu_open) {
+
+        scr_printf(
+            "PS2FileManager\n"
+        );
+
+        scr_printf(
+            "Path: %s\n",
+            file_manager.current_path
+        );
+
+        scr_printf(
+            "Selecionados: %d\n",
+            fm_selected_count(
+                &file_manager
+            )
+        );
+
+        draw_operation_menu();
+
+        return;
+    }
+
+
     scr_printf(
         "PS2FileManager\n"
     );
@@ -2072,10 +2100,6 @@ static void draw_file_screen(void)
     );
 
 
-    if (operation_menu_open) {
-
-        draw_operation_menu();
-    }
 }
 
 
