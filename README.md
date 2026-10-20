@@ -145,6 +145,20 @@ Requisitos do servidor:
 - Interface gráfica 640×448 com gsKit
 - Player de MP3, servidor FTP
 
+## Apoie o projeto
+
+Se o PS2FileManager foi útil para você, considere apoiar o desenvolvimento com uma doação via **Pix** (qualquer valor):
+
+<img src="docs/pix-qrcode.png" alt="QR Code Pix para doação" width="220">
+
+**Pix copia e cola:**
+
+```
+00020126580014BR.GOV.BCB.PIX01362c7f2bbb-2b6b-4b41-8b5c-b47a222531d65204000053039865802BR5915VERIDIANO SILVA6008REDENCAO62070503***6304DD08
+```
+
+Chave aleatória: `2c7f2bbb-2b6b-4b41-8b5c-b47a222531d6` (Veridiano Silva)
+
 ## Créditos
 
 - [PS2SDK / ps2dev](https://github.com/ps2dev) — toolchain e módulos IOP
