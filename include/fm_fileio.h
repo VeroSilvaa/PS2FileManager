@@ -21,6 +21,12 @@
 #define FILEIO_ERROR_READDIR          -115
 #define FILEIO_ERROR_PATH_TOO_LONG    -116
 #define FILEIO_ERROR_RECURSION        -117
+#define FILEIO_ERROR_REMOVE           -118
+#define FILEIO_ERROR_RMDIR            -119
+#define FILEIO_ERROR_DELETE_VERIFY    -120
+#define FILEIO_ERROR_PROTECTED        -121
+#define FILEIO_ERROR_NOT_FOUND        -122
+#define FILEIO_ERROR_NO_MEMORY        -123
 
 typedef struct {
     int error;
@@ -46,6 +52,28 @@ int fileio_copy_file(
     const char *source,
     const char *destination,
     FileCopyStatus *status
+);
+
+typedef struct {
+    int error;
+    int system_result;
+
+    int files_deleted;
+    int directories_deleted;
+
+    char stage[32];
+} FileDeleteStatus;
+
+
+/*
+ * Exclui arquivo ou pasta (recursivamente).
+ *
+ * Recusa a raiz do dispositivo e confirma ao final
+ * que o caminho deixou de existir.
+ */
+int fileio_delete(
+    const char *path,
+    FileDeleteStatus *status
 );
 
 const char *fileio_error_string(

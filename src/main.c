@@ -74,7 +74,7 @@ static const char *operation_menu[MENU_ITEM_COUNT] = {
     "Mover [desativado]",
     "Colar",
     "Renomear [desativado]",
-    "Excluir [desativado]",
+    "Excluir",
     "Selecionar todos",
     "Desmarcar todos",
     "Cancelar"
@@ -96,6 +96,8 @@ static int mc0_available = 0;
 static int mc1_available = 0;
 
 static int operation_menu_open = 0;
+
+static int delete_confirm_open = 0;
 static int operation_menu_cursor = 0;
 
 static char status_message[256];
@@ -710,11 +712,26 @@ static void execute_operation_menu(void)
          */
         case 4:
 
-            set_status(
-                "Excluir ainda esta desativado."
-            );
-
             operation_menu_open = 0;
+
+            if (fm_selected_count(
+                    &file_manager) <= 0) {
+
+                set_status(
+                    "Nenhum item selecionado."
+                );
+
+                break;
+            }
+
+            /*
+             * Nada e apagado aqui: so abre a confirmacao.
+             */
+            delete_confirm_open = 1;
+
+            set_status(
+                "Confirme a exclusao."
+            );
 
             break;
 
@@ -766,6 +783,205 @@ static void execute_operation_menu(void)
 
             break;
     }
+}
+
+
+/* ============================================================
+ * Exclusao (Etapa 4a)
+ * ============================================================ */
+
+static void delete_selection(void)
+{
+    int i;
+    int result;
+    int deleted;
+
+    FMEntry *entry;
+    FileDeleteStatus delete_status;
+
+
+    deleted = 0;
+
+
+    for (i = 0;
+         i < file_manager.count;
+         i++) {
+
+        entry =
+            &file_manager.entries[i];
+
+        if (!entry->selected)
+            continue;
+
+
+        result =
+            fileio_delete(
+                entry->path,
+                &delete_status
+            );
+
+
+        printf(
+            "FM DELETE: %s | %s | err %d | sys %d | arquivos %d | pastas %d\n",
+            entry->path,
+            delete_status.stage,
+            delete_status.error,
+            delete_status.system_result,
+            delete_status.files_deleted,
+            delete_status.directories_deleted
+        );
+
+
+        if (result !=
+            FILEIO_COPY_OK) {
+
+            snprintf(
+                status_message,
+                sizeof(status_message),
+                "ERRO EXCLUIR %s | err %d | sys %d | %s",
+                delete_status.stage,
+                delete_status.error,
+                delete_status.system_result,
+                fileio_error_string(
+                    delete_status.error
+                )
+            );
+
+            /*
+             * Para no primeiro erro. Itens ja excluidos
+             * continuam excluidos; os demais ficam intactos.
+             */
+            fm_refresh(
+                &file_manager
+            );
+
+            clipboard_clear(
+                &clipboard
+            );
+
+            return;
+        }
+
+
+        deleted++;
+    }
+
+
+    fm_refresh(
+        &file_manager
+    );
+
+    /*
+     * O clipboard pode apontar para itens que
+     * deixaram de existir.
+     */
+    clipboard_clear(
+        &clipboard
+    );
+
+
+    snprintf(
+        status_message,
+        sizeof(status_message),
+        "EXCLUIDO: %d item(ns)",
+        deleted
+    );
+}
+
+
+static void update_delete_confirm(void)
+{
+    if (pressed(PAD_CROSS)) {
+
+        delete_confirm_open = 0;
+
+        delete_selection();
+
+        return;
+    }
+
+
+    if (pressed(PAD_CIRCLE)) {
+
+        delete_confirm_open = 0;
+
+        set_status(
+            "Exclusao cancelada."
+        );
+
+        return;
+    }
+}
+
+
+static void draw_delete_confirm(void)
+{
+    int i;
+    int shown;
+    int selected;
+
+
+    selected =
+        fm_selected_count(
+            &file_manager
+        );
+
+
+    scr_printf(
+        "PS2FileManager\n"
+    );
+
+    scr_printf(
+        "===============\n\n"
+    );
+
+    scr_printf(
+        "EXCLUIR %d ITEM(NS)?\n\n",
+        selected
+    );
+
+
+    shown = 0;
+
+    for (i = 0;
+         i < file_manager.count && shown < 12;
+         i++) {
+
+        if (!file_manager.entries[i].selected)
+            continue;
+
+        scr_printf(
+            "  %s%s\n",
+            file_manager.entries[i].is_dir
+                ? "<DIR> "
+                : "",
+            file_manager.entries[i].name
+        );
+
+        shown++;
+    }
+
+
+    if (selected > shown) {
+
+        scr_printf(
+            "  ... e mais %d\n",
+            selected - shown
+        );
+    }
+
+
+    scr_printf(
+        "\nPastas sao excluidas com todo o conteudo.\n"
+    );
+
+    scr_printf(
+        "Esta operacao NAO pode ser desfeita.\n\n"
+    );
+
+    scr_printf(
+        "X confirmar | O cancelar\n"
+    );
 }
 
 
@@ -868,6 +1084,14 @@ static void update_device_screen(void)
 static void update_file_screen(void)
 {
     int selected;
+
+
+    if (delete_confirm_open) {
+
+        update_delete_confirm();
+
+        return;
+    }
 
 
     if (operation_menu_open) {
@@ -1167,6 +1391,17 @@ static void draw_file_screen(void)
 
 
     scr_clear();
+
+
+    /*
+     * Confirmacao de exclusao ocupa a tela inteira.
+     */
+    if (delete_confirm_open) {
+
+        draw_delete_confirm();
+
+        return;
+    }
 
 
     scr_printf(

@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 
@@ -13,6 +14,7 @@
 #define FMIO_BUFFER_SIZE    4096
 #define FMIO_MAX_PATH       1024
 #define FMIO_MAX_RECURSION  16
+#define FMIO_NAME_MAX       256
 
 
 static unsigned char copy_buffer[
@@ -1067,6 +1069,358 @@ int fileio_copy_file(
 
 
 /* ============================================================
+ * EXCLUSAO
+ * ============================================================ */
+
+static void fmio_delete_error(
+    FileDeleteStatus *status,
+    int error,
+    int system_result,
+    const char *stage)
+{
+    if (!status)
+        return;
+
+    status->error = error;
+    status->system_result = system_result;
+
+    strncpy(
+        status->stage,
+        stage,
+        sizeof(status->stage) - 1
+    );
+
+    status->stage[
+        sizeof(status->stage) - 1
+    ] = '\0';
+}
+
+
+static int fmio_delete_path(
+    const char *path,
+    FileDeleteStatus *status,
+    int recursion)
+{
+    DIR *dir;
+    struct dirent *entry;
+
+    char child[
+        FMIO_MAX_PATH
+    ];
+
+    char *names;
+    char *grown;
+
+    int capacity;
+    int count;
+    int i;
+    int result;
+    int is_directory;
+
+
+    if (recursion >
+        FMIO_MAX_RECURSION) {
+
+        fmio_delete_error(
+            status,
+            FILEIO_ERROR_RECURSION,
+            0,
+            "RECURSION"
+        );
+
+        return FILEIO_ERROR_RECURSION;
+    }
+
+
+    if (!fmio_get_type(
+            path,
+            &is_directory)) {
+
+        fmio_delete_error(
+            status,
+            FILEIO_ERROR_NOT_FOUND,
+            errno,
+            "NOT FOUND"
+        );
+
+        return FILEIO_ERROR_NOT_FOUND;
+    }
+
+
+    /*
+     * Arquivo.
+     */
+    if (!is_directory) {
+
+        errno = 0;
+
+        if (remove(path) < 0) {
+
+            fmio_delete_error(
+                status,
+                FILEIO_ERROR_REMOVE,
+                errno,
+                "REMOVE"
+            );
+
+            return FILEIO_ERROR_REMOVE;
+        }
+
+        if (status)
+            status->files_deleted++;
+
+        return FILEIO_COPY_OK;
+    }
+
+
+    /*
+     * Pasta: primeiro lemos TODOS os nomes e fechamos o
+     * diretorio; so depois apagamos. Apagar durante o
+     * readdir() pode pular entradas.
+     */
+    errno = 0;
+
+    dir = opendir(path);
+
+    if (!dir) {
+
+        fmio_delete_error(
+            status,
+            FILEIO_ERROR_OPENDIR,
+            errno,
+            "OPENDIR"
+        );
+
+        return FILEIO_ERROR_OPENDIR;
+    }
+
+
+    names = NULL;
+    capacity = 0;
+    count = 0;
+
+
+    while ((entry = readdir(dir)) != NULL) {
+
+        if (strcmp(entry->d_name, ".") == 0 ||
+            strcmp(entry->d_name, "..") == 0)
+            continue;
+
+
+        if (count >= capacity) {
+
+            capacity =
+                capacity ? capacity * 2 : 16;
+
+            grown = realloc(
+                names,
+                capacity * FMIO_NAME_MAX
+            );
+
+            if (!grown) {
+
+                free(names);
+                closedir(dir);
+
+                fmio_delete_error(
+                    status,
+                    FILEIO_ERROR_NO_MEMORY,
+                    0,
+                    "NO MEMORY"
+                );
+
+                return FILEIO_ERROR_NO_MEMORY;
+            }
+
+            names = grown;
+        }
+
+
+        strncpy(
+            names + count * FMIO_NAME_MAX,
+            entry->d_name,
+            FMIO_NAME_MAX - 1
+        );
+
+        names[
+            count * FMIO_NAME_MAX +
+            FMIO_NAME_MAX - 1
+        ] = '\0';
+
+        count++;
+    }
+
+
+    closedir(dir);
+
+
+    for (i = 0; i < count; i++) {
+
+        if (!fmio_join_path(
+                path,
+                names + i * FMIO_NAME_MAX,
+                child,
+                sizeof(child))) {
+
+            free(names);
+
+            fmio_delete_error(
+                status,
+                FILEIO_ERROR_PATH_TOO_LONG,
+                0,
+                "CHILD PATH"
+            );
+
+            return FILEIO_ERROR_PATH_TOO_LONG;
+        }
+
+
+        result =
+            fmio_delete_path(
+                child,
+                status,
+                recursion + 1
+            );
+
+
+        if (result != FILEIO_COPY_OK) {
+
+            free(names);
+
+            return result;
+        }
+    }
+
+
+    free(names);
+
+
+    errno = 0;
+
+    if (rmdir(path) < 0) {
+
+        fmio_delete_error(
+            status,
+            FILEIO_ERROR_RMDIR,
+            errno,
+            "RMDIR"
+        );
+
+        return FILEIO_ERROR_RMDIR;
+    }
+
+
+    if (status)
+        status->directories_deleted++;
+
+
+    return FILEIO_COPY_OK;
+}
+
+
+int fileio_delete(
+    const char *path,
+    FileDeleteStatus *status)
+{
+    const char *colon;
+    int result;
+
+
+    if (status) {
+
+        memset(
+            status,
+            0,
+            sizeof(FileDeleteStatus)
+        );
+
+        strcpy(
+            status->stage,
+            "INIT"
+        );
+    }
+
+
+    if (!path ||
+        path[0] == '\0') {
+
+        fmio_delete_error(
+            status,
+            FILEIO_ERROR_INVALID_PATH,
+            0,
+            "PATH"
+        );
+
+        return FILEIO_ERROR_INVALID_PATH;
+    }
+
+
+    /*
+     * Nunca apagar a raiz de um dispositivo
+     * ("mc0:", "mc0:/", "mass:/" ...).
+     */
+    colon = strchr(path, ':');
+
+    if (!colon ||
+        colon[1] == '\0' ||
+        (colon[1] == '/' && colon[2] == '\0')) {
+
+        fmio_delete_error(
+            status,
+            FILEIO_ERROR_PROTECTED,
+            0,
+            "PROTECTED ROOT"
+        );
+
+        return FILEIO_ERROR_PROTECTED;
+    }
+
+
+    result =
+        fmio_delete_path(
+            path,
+            status,
+            0
+        );
+
+
+    if (result != FILEIO_COPY_OK)
+        return result;
+
+
+    /*
+     * Confirma que o caminho deixou de existir.
+     */
+    if (fmio_path_exists(path)) {
+
+        fmio_delete_error(
+            status,
+            FILEIO_ERROR_DELETE_VERIFY,
+            0,
+            "STILL EXISTS"
+        );
+
+        return FILEIO_ERROR_DELETE_VERIFY;
+    }
+
+
+    if (status) {
+
+        status->error = FILEIO_COPY_OK;
+        status->system_result = 0;
+
+        strcpy(
+            status->stage,
+            "DELETED"
+        );
+    }
+
+
+    return FILEIO_COPY_OK;
+}
+
+
+/* ============================================================
  * ERROS
  * ============================================================ */
 
@@ -1131,6 +1485,24 @@ const char *fileio_error_string(
 
         case FILEIO_ERROR_RECURSION:
             return "limite de recursao";
+
+        case FILEIO_ERROR_REMOVE:
+            return "falha ao excluir arquivo";
+
+        case FILEIO_ERROR_RMDIR:
+            return "falha ao excluir pasta";
+
+        case FILEIO_ERROR_DELETE_VERIFY:
+            return "item ainda existe";
+
+        case FILEIO_ERROR_PROTECTED:
+            return "raiz do dispositivo protegida";
+
+        case FILEIO_ERROR_NOT_FOUND:
+            return "item nao encontrado";
+
+        case FILEIO_ERROR_NO_MEMORY:
+            return "memoria insuficiente";
 
         default:
             return "erro desconhecido";

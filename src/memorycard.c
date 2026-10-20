@@ -1563,5 +1563,31 @@ int memorycard_list(
     }
 
 
+    /*
+     * Remove "." e "..": selecionados por engano (TRIANGULO),
+     * fariam a copia/exclusao agir sobre a pasta PAI.
+     */
+    {
+        int read_index;
+        int write_index = 0;
+
+        for (read_index = 0;
+             read_index < count;
+             read_index++) {
+
+            if (strcmp(entries[read_index].name, ".") == 0 ||
+                strcmp(entries[read_index].name, "..") == 0)
+                continue;
+
+            if (write_index != read_index)
+                entries[write_index] = entries[read_index];
+
+            write_index++;
+        }
+
+        count = write_index;
+    }
+
+
     return count;
 }
