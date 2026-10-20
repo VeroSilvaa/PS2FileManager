@@ -44,6 +44,15 @@ int memorycard_list(
     int max_entries
 );
 
+/*
+ * Renomeia arquivo ou pasta ("mc0:/PASTA/ARQ") com mcSetFileInfo.
+ * Devolve o resultado do mcSync (0 = ok, < 0 = erro sceMcRes*).
+ */
+int memorycard_rename(
+    const char *path,
+    const char *new_name
+);
+
 int memorycard_debug_info(
     int port,
     MemoryCardDebug *info

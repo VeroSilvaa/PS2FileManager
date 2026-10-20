@@ -638,6 +638,97 @@ static int memorycard_path_exists(
 
 
 /* ================================================== */
+/* RENOMEAR                                           */
+/* ================================================== */
+
+/*
+ * Flag "nome" do mcSetFileInfo: nao existe no libmc-common.h
+ * (so Create/Modify/Attr). Valor usado pelo wLaunchELF (Rename).
+ */
+#define MC_FILE_INFO_NAME 0x0010
+
+int memorycard_rename(
+    const char *path,
+    const char *new_name
+)
+{
+    const char *relative;
+    int port;
+    int result;
+
+
+    port =
+        get_port_from_path(
+            path
+        );
+
+    relative =
+        get_mc_relative_path(
+            path
+        );
+
+    if (
+        port < 0 ||
+        relative == NULL ||
+        new_name == NULL ||
+        strlen(new_name) >= sizeof(check_entry[0].EntryName)
+    ) {
+        return -1;
+    }
+
+
+    /*
+     * Tabela atual do item: o mcSetFileInfo grava a tabela
+     * inteira, mas so o campo indicado nos flags e aplicado.
+     */
+    if (
+        memorycard_path_exists(
+            port,
+            relative
+        ) != 1
+    ) {
+        return sceMcResNoEntry;
+    }
+
+
+    memset(
+        check_entry[0].EntryName,
+        0,
+        sizeof(check_entry[0].EntryName)
+    );
+
+    memcpy(
+        check_entry[0].EntryName,
+        new_name,
+        strlen(new_name)
+    );
+
+
+    if (
+        mcSetFileInfo(
+            port,
+            0,
+            relative,
+            check_entry,
+            MC_FILE_INFO_NAME
+        ) < 0
+    ) {
+        return -1;
+    }
+
+    if (
+        memorycard_sync(
+            &result
+        ) < 0
+    ) {
+        return -1;
+    }
+
+    return result;
+}
+
+
+/* ================================================== */
 /* COPY + VERIFY                                      */
 /* ================================================== */
 

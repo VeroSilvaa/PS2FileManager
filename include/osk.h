@@ -10,7 +10,7 @@
  * START confirma | O cancela
  */
 
-#define OSK_MAX_TEXT  64
+#define OSK_MAX_TEXT  128
 
 typedef enum {
     OSK_EDITING = 0,

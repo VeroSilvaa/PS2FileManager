@@ -115,7 +115,7 @@ static const char *operation_menu[MENU_ITEM_COUNT] = {
     "Recortar (mover)",
     "Colar",
     "Criar pasta",
-    "Renomear [desativado]",
+    "Renomear",
     "Excluir",
     "Selecionar todos",
     "Desmarcar todos",
@@ -148,7 +148,8 @@ static int operation_menu_open = 0;
 typedef enum {
     CONFIRM_NONE = 0,
     CONFIRM_DELETE,
-    CONFIRM_MOVE
+    CONFIRM_MOVE,
+    CONFIRM_RENAME      /* so para arquivo de sistema do save */
 } ConfirmAction;
 
 static ConfirmAction confirm_action = CONFIRM_NONE;
@@ -159,10 +160,17 @@ static int operation_menu_cursor = 0;
  */
 typedef enum {
     KEYBOARD_NONE = 0,
-    KEYBOARD_MKDIR
+    KEYBOARD_MKDIR,
+    KEYBOARD_RENAME
 } KeyboardAction;
 
 static KeyboardAction keyboard_action = KEYBOARD_NONE;
+
+/*
+ * Item sendo renomeado (guardado ao abrir: a lista pode mudar).
+ */
+static char rename_path[FM_MAX_PATH];
+static char rename_name[FM_MAX_NAME];
 
 /*
  * Instalacao HDLoader: verificada ao abrir o menu R1.
@@ -2308,6 +2316,205 @@ static void create_folder(const char *name)
 }
 
 
+/* ============================================================
+ * Renomear (Etapa 4c)
+ * ============================================================ */
+
+static int is_memory_card_path(const char *path)
+{
+    return strncmp(path, "mc0:", 4) == 0 ||
+           strncmp(path, "mc1:", 4) == 0;
+}
+
+
+static void open_rename_keyboard(void)
+{
+    int max_length;
+
+    max_length =
+        is_memory_card_path(rename_path)
+            ? MC_MAX_NAME
+            : NAME_MAX_TYPED;
+
+    /*
+     * Nome atual mais longo que o limite de digitacao:
+     * aceita ate o tamanho dele.
+     */
+    if ((int)strlen(rename_name) > max_length)
+        max_length = strlen(rename_name);
+
+    osk_open("RENOMEAR", rename_name, max_length);
+
+    keyboard_action = KEYBOARD_RENAME;
+}
+
+
+/*
+ * Menu R1 -> Renomear: o item selecionado (um so) ou, sem
+ * selecao, o item do cursor.
+ */
+static void start_rename(void)
+{
+    FMEntry *entry = NULL;
+    int selected;
+    int i;
+
+
+    selected = fm_selected_count(&file_manager);
+
+    if (selected > 1) {
+
+        set_status("Renomear: selecione so um item.");
+
+        return;
+    }
+
+    if (selected == 1) {
+
+        for (i = 0; i < file_manager.count; i++) {
+
+            if (file_manager.entries[i].selected) {
+
+                entry = &file_manager.entries[i];
+
+                break;
+            }
+        }
+
+    } else if (file_manager.count > 0) {
+
+        entry = &file_manager.entries[file_manager.cursor];
+    }
+
+    if (!entry) {
+
+        set_status("Nenhum item para renomear.");
+
+        return;
+    }
+
+    if (strlen(entry->name) > OSK_MAX_TEXT) {
+
+        set_status("Nome atual longo demais para o teclado.");
+
+        return;
+    }
+
+
+    snprintf(rename_path, sizeof(rename_path), "%s", entry->path);
+    snprintf(rename_name, sizeof(rename_name), "%s", entry->name);
+
+
+    /*
+     * Arquivo de sistema do save: confirmacao com TRIANGULO
+     * antes de abrir o teclado.
+     */
+    if (is_system_name(rename_name)) {
+
+        confirm_action = CONFIRM_RENAME;
+
+        set_status("Confirme: renomear arquivo de sistema.");
+
+        return;
+    }
+
+    open_rename_keyboard();
+}
+
+
+static void rename_item(const char *new_name)
+{
+    char new_path[FM_MAX_PATH];
+    int result;
+
+
+    if (!name_is_valid(new_name)) {
+
+        set_status("Nome invalido.");
+
+        return;
+    }
+
+    if (strcmp(new_name, rename_name) == 0) {
+
+        set_status("Nome nao mudou.");
+
+        return;
+    }
+
+    /*
+     * So mudar maiusculas/minusculas do proprio item e permitido.
+     */
+    if (strcasecmp(new_name, rename_name) != 0 &&
+        name_exists(new_name)) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "Ja existe: %s",
+            new_name
+        );
+
+        return;
+    }
+
+    if (!build_destination_path(
+            file_manager.current_path,
+            new_name,
+            new_path,
+            sizeof(new_path))) {
+
+        set_status("Caminho invalido.");
+
+        return;
+    }
+
+
+    errno = 0;
+
+    if (is_memory_card_path(rename_path))
+        result = memorycard_rename(rename_path, new_name);
+    else
+        result = rename(rename_path, new_path);
+
+    printf(
+        "FM RENAME: %s -> %s | %d (errno %d)\n",
+        rename_path,
+        new_path,
+        result,
+        errno
+    );
+
+
+    if (hdd_mounted_count() > 0)
+        hdd_sync_all();
+
+    fm_refresh(&file_manager);
+
+
+    if (result < 0) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "Erro ao renomear %s (%d)",
+            rename_name,
+            is_memory_card_path(rename_path) ? result : errno
+        );
+
+        return;
+    }
+
+    snprintf(
+        status_message,
+        sizeof(status_message),
+        "Renomeado: %s -> %s",
+        rename_name,
+        new_name
+    );
+}
+
+
 static void update_keyboard(void)
 {
     KeyboardAction action;
@@ -2334,6 +2541,8 @@ static void update_keyboard(void)
 
     if (action == KEYBOARD_MKDIR)
         create_folder(osk_text());
+    else if (action == KEYBOARD_RENAME)
+        rename_item(osk_text());
 }
 
 
@@ -2431,11 +2640,9 @@ static void execute_operation_menu(void)
          */
         case 4:
 
-            set_status(
-                "Renomear ainda esta desativado."
-            );
-
             operation_menu_open = 0;
+
+            start_rename();
 
             break;
 
@@ -2646,6 +2853,9 @@ static void delete_selection(void)
 
 static int confirm_has_system(void)
 {
+    if (confirm_action == CONFIRM_RENAME)
+        return 1;
+
     if (confirm_action == CONFIRM_DELETE)
         return selection_has_system();
 
@@ -2704,6 +2914,10 @@ static void update_confirm(void)
             if (hdd_mounted_count() > 0)
                 hdd_sync_all();
 
+        } else if (action == CONFIRM_RENAME) {
+
+            open_rename_keyboard();
+
         } else {
 
             run_paste();
@@ -2735,6 +2949,19 @@ static void draw_confirm(void)
     scr_printf(
         "===============\n\n"
     );
+
+
+    if (confirm_action == CONFIRM_RENAME) {
+
+        scr_printf("RENOMEAR ARQUIVO DE SISTEMA?\n\n");
+        scr_printf("  %s  [SISTEMA]\n\n", rename_name);
+        scr_printf("icon.sys, .icn e B?DATA-SYSTEM sao lidos pela BIOS\n");
+        scr_printf("pelo nome. Com outro nome o save pode ficar\n");
+        scr_printf("sem icone ou \"corrompido\".\n\n");
+        scr_printf("TRIANGULO continuar | O cancelar\n");
+
+        return;
+    }
 
 
     if (confirm_action == CONFIRM_DELETE) {
