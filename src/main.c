@@ -1061,6 +1061,9 @@ static void run_paste_items(void)
     int length;
     int move;
 
+    unsigned long long source_bytes;
+    int source_files;
+
     char destination[
         FM_MAX_PATH
     ];
@@ -1193,6 +1196,45 @@ static void run_paste_items(void)
          * copia verificada byte a byte.
          */
         if (move) {
+
+            /*
+             * Confere se tudo da origem foi copiado: no SMB
+             * uma listagem interrompida parece fim de pasta
+             * (fm_fileio.c), e a exclusao apagaria arquivos
+             * que nao chegaram ao destino.
+             */
+            source_bytes = 0;
+            source_files = 0;
+
+            fileio_measure(
+                source,
+                &source_bytes,
+                &source_files
+            );
+
+            if (source_files != copy_status.files_copied ||
+                source_bytes != (unsigned long long)(unsigned int)copy_status.bytes_copied) {
+
+                printf(
+                    "FM MOVE: %s | origem MANTIDA | origem %d arq %llu bytes | copiado %d arq %d bytes\n",
+                    source,
+                    source_files,
+                    source_bytes,
+                    copy_status.files_copied,
+                    copy_status.bytes_copied
+                );
+
+                set_status(
+                    "COPIADO, mas origem NAO excluida: totais diferentes."
+                );
+
+                fm_refresh(
+                    &file_manager
+                );
+
+                return;
+            }
+
 
             result =
                 fileio_delete(

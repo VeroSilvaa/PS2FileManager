@@ -878,7 +878,15 @@ static int fmio_copy_directory(
 
         if (!entry) {
 
-            if (errno != 0) {
+            /*
+             * SMBMAN nunca devolve 0 no fim da pasta: devolve
+             * -EINVAL, e o getdents() da libcglue converte o
+             * erro duas vezes (errno sempre 1). No SMB, erro
+             * aqui = fim. O mover confere os totais antes de
+             * apagar a origem (main.c).
+             */
+            if (errno != 0 &&
+                strncmp(source, "smb", 3) != 0) {
 
                 int saved_errno = errno;
 
