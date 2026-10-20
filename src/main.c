@@ -19,11 +19,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 
 #include "memorycard.h"
 #include "filemanager.h"
 #include "clipboard.h"
 #include "fm_fileio.h"
+#include "network.h"
+#include "smb.h"
 
 
 
@@ -54,6 +57,20 @@ extern unsigned int size_mcserv_irx;
 #define MAX_VISIBLE_FILES   18
 
 #define MENU_ITEM_COUNT     8
+
+/*
+ * SMB (Etapa 8). Fixo ate existir a tela de configuracao
+ * (depende do teclado virtual da Etapa 4c). Mesmos dados
+ * usados com sucesso no PS2DVDPlayer.
+ */
+#define SMB_SERVER          "192.168.1.9"
+#define SMB_SHARE           "samba"
+#define SMB_USER            "guest"
+#define SMB_PASSWORD        ""
+#define SMB_DHCP_TIMEOUT    20
+
+#define DEVICE_COUNT        3
+#define DEVICE_SMB          2
 
 
 /* ============================================================
@@ -304,12 +321,187 @@ static void refresh_devices(void)
 
 
 /* ============================================================
+ * SMB: rede + conexao (Etapa 8)
+ * ============================================================ */
+
+static int smb_ensure_connected(void)
+{
+    static int network_ready = 0;
+
+    const NetworkInfo *net;
+    const SMBInfo *smb;
+
+    clock_t start;
+    clock_t tick;
+    int seconds;
+
+
+    smb = smb_get_info();
+
+    if (smb->connected)
+        return 1;
+
+
+    scr_clear();
+
+    scr_printf("PS2FileManager\n");
+    scr_printf("===============\n\n");
+    scr_printf("Conectando ao SMB...\n\n");
+    scr_printf("Servidor: %s\n", SMB_SERVER);
+    scr_printf("Share   : %s\n", SMB_SHARE);
+    scr_printf("Usuario : %s\n\n", SMB_USER);
+
+
+    /*
+     * Pilha de rede: carregada uma unica vez.
+     */
+    if (!network_ready) {
+
+        scr_printf("Iniciando rede (DEV9/SMAP/PS2IP)...\n");
+
+        if (network_init() < 0) {
+
+            set_status(
+                "ERRO rede: falha ao carregar modulos."
+            );
+
+            return 0;
+        }
+
+        if (network_start_dhcp() < 0) {
+
+            set_status(
+                "ERRO rede: falha ao iniciar DHCP."
+            );
+
+            return 0;
+        }
+
+        network_ready = 1;
+    }
+
+
+    scr_printf("Aguardando DHCP");
+
+    start = clock();
+    seconds = 0;
+
+    while (1) {
+
+        network_update();
+
+        net = network_get_info();
+
+        if (net->link_up &&
+            net->dhcp_bound &&
+            strcmp(net->ip, "0.0.0.0") != 0)
+            break;
+
+        if (clock() - start >
+            (clock_t)SMB_DHCP_TIMEOUT * CLOCKS_PER_SEC) {
+
+            snprintf(
+                status_message,
+                sizeof(status_message),
+                "ERRO: DHCP sem resposta em %ds (link %s)",
+                SMB_DHCP_TIMEOUT,
+                net->link_up ? "OK" : "DESLIGADO"
+            );
+
+            printf(
+                "FM SMB: DHCP timeout, link=%d\n",
+                net->link_up
+            );
+
+            return 0;
+        }
+
+        /*
+         * Espera ~250 ms entre consultas.
+         */
+        tick = clock();
+
+        while (clock() - tick < CLOCKS_PER_SEC / 4) {
+        }
+
+        if ((clock() - start) / CLOCKS_PER_SEC > seconds) {
+
+            seconds++;
+
+            scr_printf(".");
+        }
+    }
+
+
+    scr_printf("\nIP do PS2: %s\n\n", net->ip);
+
+    printf("FM SMB: rede pronta, IP %s\n", net->ip);
+
+
+    scr_printf("Abrindo compartilhamento...\n");
+
+    if (smb_init() < 0 ||
+        smb_connect(
+            SMB_SERVER,
+            SMB_SHARE,
+            SMB_USER,
+            SMB_PASSWORD) < 0) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "ERRO SMB: %s",
+            smb->error
+        );
+
+        return 0;
+    }
+
+
+    return 1;
+}
+
+
+static void open_smb(void)
+{
+    if (!smb_ensure_connected())
+        return;
+
+
+    fm_init(
+        &file_manager,
+        "smb0:/"
+    );
+
+
+    current_screen =
+        SCREEN_FILES;
+
+
+    snprintf(
+        status_message,
+        sizeof(status_message),
+        "Aberto: smb0:/ (%s em %s)",
+        SMB_SHARE,
+        SMB_SERVER
+    );
+}
+
+
+/* ============================================================
  * Abre Memory Card
  * ============================================================ */
 
 static void open_device(int device)
 {
     char path[16];
+
+    if (device == DEVICE_SMB) {
+
+        open_smb();
+
+        return;
+    }
 
     if (device == 0) {
 
@@ -1365,7 +1557,7 @@ static void update_device_screen(void)
 
     if (pressed(PAD_DOWN)) {
 
-        if (device_cursor < 1)
+        if (device_cursor < DEVICE_COUNT - 1)
             device_cursor++;
     }
 
@@ -1621,6 +1813,19 @@ static void draw_device_screen(void)
             : "INDISPONIVEL"
     );
 
+
+    if (device_cursor == DEVICE_SMB)
+        scr_printf("> ");
+    else
+        scr_printf("  ");
+
+
+    scr_printf(
+        "Rede SMB (smb0:) [%s]\n",
+        smb_get_info()->connected
+            ? "CONECTADO"
+            : SMB_SERVER "/" SMB_SHARE
+    );
 
     scr_printf(
         "\n\n"

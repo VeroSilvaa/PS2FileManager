@@ -1,15 +1,18 @@
 EE_BIN = PS2FileManager.elf
 
-EE_OBJS = src/main.o src/memorycard.o src/filemanager.o src/clipboard.o src/fm_fileio.o
+EE_OBJS = src/main.o src/memorycard.o src/filemanager.o src/clipboard.o src/fm_fileio.o src/network.o src/smb.o
 
 # Modulos IOP do PS2SDK embutidos no ELF (mesmo modelo do wLaunchELF)
 IRX_OBJS = irx/iomanX_irx.o irx/fileXio_irx.o irx/mcman_irx.o irx/mcserv_irx.o
+
+# Rede + SMB (mesmos modulos e nomes de simbolo do PS2DVDPlayer)
+IRX_OBJS += irx/DEV9_irx.o irx/NETMAN_irx.o irx/SMAP_irx.o irx/PS2IP_irx.o irx/PS2IPS_irx.o irx/SMBMAN_irx.o
 
 EE_OBJS += $(IRX_OBJS)
 
 EE_INCS = -I$(PS2SDK)/ee/include -I$(PS2SDK)/common/include -Iinclude
 
-EE_LIBS = -lpad -lmc -lfileXio -lpatches -ldebug -lkernel
+EE_LIBS = -lpad -lmc -lfileXio -lnetman -lps2ips -lpatches -ldebug -lkernel
 
 EE_CFLAGS = -O2 -G0 -Wall
 
@@ -18,6 +21,31 @@ all: $(EE_BIN)
 irx/%_irx.c: $(PS2SDK)/iop/irx/%.irx
 	@mkdir -p irx
 	bin2c $< $@ $*_irx
+
+# Nome do arquivo diferente do simbolo (ps2ip-nm tem hifen)
+irx/DEV9_irx.c: $(PS2SDK)/iop/irx/ps2dev9.irx
+	@mkdir -p irx
+	bin2c $< $@ DEV9_irx
+
+irx/NETMAN_irx.c: $(PS2SDK)/iop/irx/netman.irx
+	@mkdir -p irx
+	bin2c $< $@ NETMAN_irx
+
+irx/SMAP_irx.c: $(PS2SDK)/iop/irx/smap.irx
+	@mkdir -p irx
+	bin2c $< $@ SMAP_irx
+
+irx/PS2IP_irx.c: $(PS2SDK)/iop/irx/ps2ip-nm.irx
+	@mkdir -p irx
+	bin2c $< $@ PS2IP_irx
+
+irx/PS2IPS_irx.c: $(PS2SDK)/iop/irx/ps2ips.irx
+	@mkdir -p irx
+	bin2c $< $@ PS2IPS_irx
+
+irx/SMBMAN_irx.c: $(PS2SDK)/iop/irx/smbman.irx
+	@mkdir -p irx
+	bin2c $< $@ SMBMAN_irx
 
 clean:
 	rm -f $(EE_BIN) $(EE_OBJS)
