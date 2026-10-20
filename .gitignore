@@ -2,11 +2,15 @@
 /wLaunchELF/
 /SMS/
 /PS2DVDPlayer/
+/HDLGameInstaller/
+/Open-PS2-Loader/
 
 # Saidas de build
 *.o
 *.elf
 /irx/
+/iop/*/obj/
+/iop/*/*.irx
 
 # Imagens de pendrive de teste (recriar com usb/mkimg.sh)
 /usb/*.img

@@ -56,7 +56,14 @@ irx/PS2ATAD_irx.c: $(PS2SDK)/iop/irx/ps2atad.irx
 	@mkdir -p irx
 	bin2c $< $@ PS2ATAD_irx
 
-irx/PS2HDD_irx.c: $(PS2SDK)/iop/irx/ps2hdd.irx
+# Driver APA proprio: o do PS2SDK compilado com suporte a HDLoader
+# (iop/ps2hdd-hdl/Makefile).
+HDD_HDL_DIR = iop/ps2hdd-hdl
+
+$(HDD_HDL_DIR)/ps2hdd-hdl.irx: $(wildcard $(HDD_HDL_DIR)/src/* $(HDD_HDL_DIR)/libapa/*/*) $(HDD_HDL_DIR)/Makefile
+	$(MAKE) -C $(HDD_HDL_DIR)
+
+irx/PS2HDD_irx.c: $(HDD_HDL_DIR)/ps2hdd-hdl.irx
 	@mkdir -p irx
 	bin2c $< $@ PS2HDD_irx
 
@@ -83,6 +90,7 @@ irx/USBMASS_BD_irx.c: $(PS2SDK)/iop/irx/usbmass_bd.irx
 clean:
 	rm -f $(EE_BIN) $(EE_OBJS)
 	rm -rf irx
+	$(MAKE) -C $(HDD_HDL_DIR) clean
 
 include $(PS2SDK)/samples/Makefile.pref
 include $(PS2SDK)/samples/Makefile.eeglobal
