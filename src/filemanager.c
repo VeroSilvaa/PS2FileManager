@@ -113,8 +113,22 @@ static int fm_list_partitions(FMEntry *entries, int max_entries)
     while (count < max_entries && (de = readdir(dir)) != NULL) {
 
         FMEntry *entry = &entries[count];
+        int i;
 
         if (de->d_name[0] == '\0')
+            continue;
+
+        /*
+         * Subparticoes (particoes > maximo do disco, jogos HDL
+         * grandes) vem com o mesmo nome da principal: uma linha so.
+         */
+        for (i = 0; i < count; i++) {
+
+            if (strcmp(entries[i].name, de->d_name) == 0)
+                break;
+        }
+
+        if (i < count)
             continue;
 
         memset(entry, 0, sizeof(FMEntry));

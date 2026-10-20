@@ -50,6 +50,20 @@ int hdd_partition_count(void);
  * PS2SDK (usada pelo wLaunchELF). APAGA TUDO. 0 = ok.
  * step (opcional) e chamado antes de cada etapa (0..total-1).
  */
+/*
+ * Espaco livre no disco (MB) e tamanho maximo de uma particao
+ * (as maiores sao montadas com subparticoes).
+ */
+unsigned int hdd_free_mb(void);
+
+/*
+ * Cria uma particao PFS de size_mb (multiplo de 128), como o
+ * hddMakeFilesystem da libhdd (wLaunchELF): principal do maior
+ * tamanho possivel + subparticoes, depois formata em PFS.
+ * Devolve os MB criados (> 0) ou erro (< 0).
+ */
+int hdd_create_partition(const char *name, unsigned int size_mb);
+
 #define HDD_FORMAT_STEPS 5
 
 typedef void (*HddFormatStepFn)(int step, int total, const char *what);

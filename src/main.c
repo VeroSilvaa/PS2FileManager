@@ -187,8 +187,26 @@ static int operation_menu_cursor = 0;
 typedef enum {
     KEYBOARD_NONE = 0,
     KEYBOARD_MKDIR,
-    KEYBOARD_RENAME
+    KEYBOARD_RENAME,
+    KEYBOARD_PARTITION
 } KeyboardAction;
+
+/*
+ * Criar particao (R1 na lista de particoes do hdd0:).
+ */
+typedef enum {
+    PARTITION_NONE = 0,
+    PARTITION_MENU,
+    PARTITION_SIZE
+} PartitionStep;
+
+#define APA_MAX_NAME        31
+
+static PartitionStep partition_step = PARTITION_NONE;
+static int partition_cursor = 0;
+static char partition_name[APA_MAX_NAME + 1];
+static unsigned int partition_size_mb;
+static unsigned int partition_free_mb;
 
 static KeyboardAction keyboard_action = KEYBOARD_NONE;
 
@@ -2577,6 +2595,204 @@ static void rename_item(const char *new_name)
 }
 
 
+/* ============================================================
+ * Criar particao no HDD (lista de particoes, R1)
+ * ============================================================ */
+
+static void partition_name_entered(const char *name)
+{
+    if (!name_is_valid(name) || strchr(name, ',')) {
+
+        /*
+         * Virgula separa os campos em "hdd0:nome,,,tamanho,PFS".
+         */
+        set_status("Nome invalido (sem virgula, sem espaco nas pontas).");
+
+        return;
+    }
+
+    if (name_exists(name)) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "Ja existe: %s",
+            name
+        );
+
+        return;
+    }
+
+
+    partition_free_mb = hdd_free_mb() / 128 * 128;
+
+    if (partition_free_mb < 128) {
+
+        set_status("Sem espaco livre no HDD (minimo 128 MB).");
+
+        return;
+    }
+
+    snprintf(partition_name, sizeof(partition_name), "%s", name);
+
+    partition_size_mb =
+        partition_free_mb < 1024
+            ? partition_free_mb
+            : 1024;
+
+    partition_step = PARTITION_SIZE;
+}
+
+
+static void create_partition(void)
+{
+    int result;
+
+
+    scr_clear();
+
+    scr_printf("PS2FileManager\n");
+    scr_printf("===============\n\n");
+    scr_printf("Criando particao %s (%u MB)...\n", partition_name, partition_size_mb);
+
+
+    result = hdd_create_partition(partition_name, partition_size_mb);
+
+    printf("FM PARTITION: %s %u MB -> %d\n", partition_name, partition_size_mb, result);
+
+
+    fm_refresh(&file_manager);
+
+
+    if (result < 0) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "ERRO ao criar particao: %s",
+            hdd_error()
+        );
+
+        return;
+    }
+
+    snprintf(
+        status_message,
+        sizeof(status_message),
+        "Particao %s criada: %d MB (PFS).",
+        partition_name,
+        result
+    );
+}
+
+
+static void update_partition(void)
+{
+    if (pressed(PAD_CIRCLE)) {
+
+        partition_step = PARTITION_NONE;
+
+        set_status("Cancelado.");
+
+        return;
+    }
+
+
+    if (partition_step == PARTITION_MENU) {
+
+        if (pressed(PAD_UP) || pressed(PAD_DOWN))
+            partition_cursor = !partition_cursor;
+
+        if (pressed(PAD_CROSS)) {
+
+            partition_step = PARTITION_NONE;
+
+            if (partition_cursor == 0) {
+
+                osk_open("CRIAR PARTICAO: nome", "", APA_MAX_NAME);
+
+                keyboard_action = KEYBOARD_PARTITION;
+            }
+        }
+
+        return;
+    }
+
+
+    /*
+     * PARTITION_SIZE: multiplos de 128 MB ate o espaco livre.
+     */
+    if (pressed(PAD_LEFT) && partition_size_mb > 128)
+        partition_size_mb -= 128;
+
+    if (pressed(PAD_RIGHT) && partition_size_mb + 128 <= partition_free_mb)
+        partition_size_mb += 128;
+
+    if (pressed(PAD_L1))
+        partition_size_mb = partition_size_mb > 1024 + 128 ? partition_size_mb - 1024 : 128;
+
+    if (pressed(PAD_R1))
+        partition_size_mb =
+            partition_size_mb + 1024 <= partition_free_mb
+                ? partition_size_mb + 1024
+                : partition_free_mb;
+
+    if (pressed(PAD_CROSS)) {
+
+        partition_step = PARTITION_NONE;
+
+        create_partition();
+    }
+}
+
+
+static void draw_partition(void)
+{
+    scr_printf("PS2FileManager\n");
+    scr_printf("===============\n");
+    scr_printf("HDD: lista de particoes\n\n");
+
+
+    if (partition_step == PARTITION_MENU) {
+
+        scr_printf("%s Criar particao\n", partition_cursor == 0 ? ">" : " ");
+        scr_printf("%s Cancelar\n\n", partition_cursor == 1 ? ">" : " ");
+
+        scr_printf("X confirmar | O cancelar\n");
+
+        return;
+    }
+
+
+    scr_printf("CRIAR PARTICAO: %s\n\n", partition_name);
+
+    scr_printf("+--------------------------------------------+\n");
+    scr_printf("|  Tamanho escolhido : %6u MB              |\n", partition_size_mb);
+    scr_printf("|  Maximo disponivel : %6u MB              |\n", partition_free_mb);
+    scr_printf("+--------------------------------------------+\n");
+
+    /*
+     * Barra: tamanho escolhido em relacao ao maximo.
+     */
+    draw_progress_bar(
+        11,
+        "Tamanho",
+        partition_size_mb,
+        partition_free_mb
+    );
+
+    scr_setXY(0, 13);
+
+    scr_printf("  128 MB  <- ESQUERDA   DIREITA ->  %u MB\n\n", partition_free_mb);
+
+    scr_printf("ESQ/DIR -/+ 128 MB | L1/R1 -/+ 1 GB\n");
+    scr_printf("Formato PFS; acima do maximo por particao o\n");
+    scr_printf("resto vira subparticoes (como o wLaunchELF).\n\n");
+
+    scr_printf("X criar | O cancelar\n");
+}
+
+
 static void update_keyboard(void)
 {
     KeyboardAction action;
@@ -2605,6 +2821,8 @@ static void update_keyboard(void)
         create_folder(osk_text());
     else if (action == KEYBOARD_RENAME)
         rename_item(osk_text());
+    else if (action == KEYBOARD_PARTITION)
+        partition_name_entered(osk_text());
 }
 
 
@@ -3602,6 +3820,14 @@ static void update_file_screen(void)
     }
 
 
+    if (partition_step != PARTITION_NONE) {
+
+        update_partition();
+
+        return;
+    }
+
+
     if (hdl_info_open) {
 
         update_hdl_info();
@@ -3777,12 +4003,14 @@ static void update_file_screen(void)
      *
      * abre menu de operações.
      */
+    /*
+     * Lista de particoes: R1 abre o menu de particoes (criar).
+     */
     if (pressed(PAD_R1) &&
         is_partition_list()) {
 
-        set_status(
-            "Lista de particoes: operacoes bloqueadas."
-        );
+        partition_cursor = 0;
+        partition_step = PARTITION_MENU;
 
         return;
     }
@@ -4013,6 +4241,14 @@ static void draw_file_screen(void)
     if (keyboard_action != KEYBOARD_NONE) {
 
         osk_draw();
+
+        return;
+    }
+
+
+    if (partition_step != PARTITION_NONE) {
+
+        draw_partition();
 
         return;
     }

@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 
 #include <tamtypes.h>
 #include <kernel.h>
@@ -493,6 +494,223 @@ int hdd_format_apa(HddFormatStepFn step)
         step(HDD_FORMAT_STEPS, HDD_FORMAT_STEPS, "concluido");
 
     return 0;
+}
+
+
+/*
+ * Livre = total - (particoes + subparticoes), como o wLaunchELF.
+ * O HDIOC_FREESECTOR devolve so o "installable" (limitado ao
+ * tamanho maximo de uma particao): nao serve aqui.
+ */
+#define APA_TYPE_FREE 0x0000
+
+unsigned int hdd_free_mb(void)
+{
+    iox_dirent_t entry;
+    unsigned int used = 0;
+    unsigned int total;
+    int fd;
+
+    total = hdd_total_mb();
+
+    if (total == 0)
+        return 0;
+
+    fd = fileXioDopen("hdd0:");
+
+    if (fd < 0)
+        return 0;
+
+    while (fileXioDread(fd, &entry) > 0) {
+
+        if (entry.stat.mode == APA_TYPE_FREE)
+            continue;
+
+        used += entry.stat.size / 2048;
+    }
+
+    fileXioDclose(fd);
+
+    printf("HDD: total %u MB, usado %u MB\n", total, used);
+
+    return used < total ? total - used : 0;
+}
+
+
+/*
+ * Tamanhos aceitos pelo APA (o maximo depende do disco:
+ * HDIOC_MAXSECTOR).
+ */
+static const struct {
+    unsigned int mb;
+    const char *text;
+} apa_sizes[] = {
+    { 128,   "128M" },
+    { 256,   "256M" },
+    { 512,   "512M" },
+    { 1024,  "1G" },
+    { 2048,  "2G" },
+    { 4096,  "4G" },
+    { 8192,  "8G" },
+    { 16384, "16G" },
+    { 32768, "32G" }
+};
+
+#define APA_SIZE_COUNT ((int)(sizeof(apa_sizes) / sizeof(apa_sizes[0])))
+
+
+/*
+ * Maior tamanho <= limit_mb que nao passa de max_index.
+ */
+static int apa_size_index(unsigned int limit_mb, int max_index)
+{
+    int i;
+
+    for (i = max_index; i >= 0; i--) {
+
+        if (apa_sizes[i].mb <= limit_mb)
+            return i;
+    }
+
+    return -1;
+}
+
+
+int hdd_create_partition(const char *name, unsigned int size_mb)
+{
+    char path[96];
+    unsigned int max_mb;
+    unsigned int left;
+    int max_index;
+    int index;
+    int fd;
+    int result;
+
+
+    if (!hdd_ready) {
+        hdd_set_error("HDD nao iniciado", 0);
+        return -1;
+    }
+
+    last_error[0] = '\0';
+
+    if (size_mb == 0 || size_mb % 128) {
+        hdd_set_error("Tamanho deve ser multiplo de 128 MB", (int)size_mb);
+        return -EINVAL;
+    }
+
+
+    /*
+     * Ja existe? (-EACCES = existe, com senha.)
+     */
+    snprintf(path, sizeof(path), "hdd0:%s", name);
+
+    fd = fileXioOpen(path, FIO_O_RDONLY);
+
+    if (fd >= 0 || fd == -EACCES) {
+
+        if (fd >= 0)
+            fileXioClose(fd);
+
+        hdd_set_error("Particao ja existe", fd);
+        return -EEXIST;
+    }
+
+
+    max_mb = (u32)fileXioDevctl("hdd0:", HDIOC_MAXSECTOR, NULL, 0, NULL, 0) / 2048;
+    max_index = apa_size_index(max_mb, APA_SIZE_COUNT - 1);
+
+    if (max_index < 0) {
+        hdd_set_error("Tamanho maximo de particao invalido", (int)max_mb);
+        return -1;
+    }
+
+
+    /*
+     * Principal: maior tamanho que cabe; sem espaco, tenta menor.
+     */
+    fd = -ENOSPC;
+
+    for (index = apa_size_index(size_mb, max_index); index >= 0; index--) {
+
+        snprintf(path, sizeof(path), "hdd0:%s,,,%s,PFS", name, apa_sizes[index].text);
+
+        fd = fileXioOpen(path, FIO_O_RDWR | FIO_O_CREAT);
+
+        printf("HDD: criar %s -> %d\n", path, fd);
+
+        if (fd >= 0 || fd != -ENOSPC)
+            break;
+    }
+
+    if (fd < 0) {
+        hdd_set_error(fd == -ENOSPC ? "Sem espaco no HDD" : "Criar particao falhou", fd);
+        return fd;
+    }
+
+    left = size_mb - apa_sizes[index].mb;
+
+
+    /*
+     * Subparticoes ate completar o tamanho pedido.
+     */
+    while (left > 0) {
+
+        index = apa_size_index(left, index);
+
+        if (index < 0)
+            break;
+
+        result = fileXioIoctl2(
+            fd,
+            HIOCADDSUB,
+            (void *)apa_sizes[index].text,
+            strlen(apa_sizes[index].text) + 1,
+            NULL,
+            0
+        );
+
+        printf("HDD: subparticao %s -> %d\n", apa_sizes[index].text, result);
+
+        if (result == -ENOSPC) {
+
+            /*
+             * Nao coube: tenta um tamanho menor.
+             */
+            index--;
+
+            if (index < 0)
+                break;
+
+            continue;
+        }
+
+        if (result < 0)
+            break;   /* -EFBIG: limite de subparticoes */
+
+        left -= apa_sizes[index].mb;
+    }
+
+    fileXioClose(fd);
+
+
+    snprintf(path, sizeof(path), "hdd0:%s", name);
+
+    result = fileXioFormat(
+        "pfs:",
+        path,
+        (const char *)pfs_format_arg,
+        sizeof(pfs_format_arg)
+    );
+
+    printf("HDD: format pfs %s -> %d\n", path, result);
+
+    if (result < 0) {
+        hdd_set_error("Formatar PFS falhou", result);
+        return result;
+    }
+
+    return (int)(size_mb - left);
 }
 
 
