@@ -155,6 +155,12 @@ static int hdl_partitions = 0;
 static int hdl_info_open = 0;
 static char hdl_reason[96];
 
+/*
+ * Conferencia completa (rele tudo): opcional, dobra o tempo.
+ * A conferencia "como o OPL" roda sempre.
+ */
+static int hdl_verify = 0;
+
 static char status_message[256];
 
 
@@ -1927,9 +1933,14 @@ static void draw_hdl_info(void)
     );
 
     scr_printf("\nCada jogo vira uma particao PP.<ID>.HDL.<nome>\n");
-    scr_printf("(gravada e conferida com a origem).\n\n");
+    scr_printf("(sempre conferida como o OPL le).\n\n");
 
-    scr_printf("X instalar | O voltar\n");
+    scr_printf(
+        "Conferir copia completa: %s\n",
+        hdl_verify ? "SIM (dobra o tempo)" : "NAO"
+    );
+
+    scr_printf("\nX instalar | QUADRADO conferir sim/nao | O voltar\n");
 }
 
 
@@ -1986,7 +1997,7 @@ static void hdl_progress_draw(
     hdl_progress_last = now;
 
 
-    all_total = total * 2ULL;
+    all_total = hdl_verify ? total * 2ULL : total;
     all_done = phase == HDL_PHASE_WRITE ? done : total + done;
 
     elapsed_ms =
@@ -2087,7 +2098,8 @@ static void hdl_install_all(void)
         if (hdl_install(
                 hdl_paths[i],
                 &hdl_games[i],
-                hdl_names[i]) == 0) {
+                hdl_names[i],
+                hdl_verify) == 0) {
 
             installed++;
 
@@ -2113,8 +2125,9 @@ static void hdl_install_all(void)
         snprintf(
             status_message,
             sizeof(status_message),
-            "HDLoader: %d jogo(s) instalado(s) e conferido(s).",
-            installed
+            "HDLoader: %d jogo(s) instalado(s) e conferido(s)%s.",
+            installed,
+            hdl_verify ? " (completa)" : " (como o OPL)"
         );
 
     } else {
@@ -2146,6 +2159,13 @@ static void update_hdl_info(void)
         hdl_install_all();
 
         return;
+    }
+
+    if (pressed(PAD_SQUARE)) {
+
+        hdl_verify = !hdl_verify;
+
+        printf("FM HDL: conferencia completa %s\n", hdl_verify ? "SIM" : "NAO");
     }
 
     if (pressed(PAD_CIRCLE))

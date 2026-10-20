@@ -813,7 +813,11 @@ static int hdl_check_opl(
 }
 
 
-int hdl_install(const char *iso_path, const IsoGameInfo *game, const char *title)
+int hdl_install(
+    const char *iso_path,
+    const IsoGameInfo *game,
+    const char *title,
+    int verify)
 {
     hdl_header_t *header;
     unsigned char *buffer;
@@ -906,10 +910,20 @@ int hdl_install(const char *iso_path, const IsoGameInfo *game, const char *title
     if (result < 0)
         goto remove;
 
-    result = hdl_stream(iso_path, part_name, total, HDL_PHASE_VERIFY, buffer, other);
+    /*
+     * Conferencia completa (opcional): rele a origem e o HDD inteiros.
+     */
+    if (verify) {
 
-    if (result < 0)
-        goto remove;
+        result = hdl_stream(iso_path, part_name, total, HDL_PHASE_VERIFY, buffer, other);
+
+        if (result < 0)
+            goto remove;
+
+    } else {
+
+        printf("FM HDL: conferencia completa desligada\n");
+    }
 
     result = hdl_check_opl(iso_path, part_name, game, buffer, other);
 

@@ -33,11 +33,17 @@ void hdl_set_progress(HdlProgressFn fn);
 int hdl_init(void);
 
 /*
- * Instala a ISO: cria a particao, grava cabecalho e dados, confere
- * relendo o HDD e comparando com a origem. Em erro, apaga a particao.
- * 0 = ok; detalhe em hdl_error() e no log.
+ * Instala a ISO: cria a particao, grava cabecalho e dados e confere
+ * como o OPL (amostras por fatia). Com verify != 0 tambem rele o HDD
+ * inteiro comparando com a origem (dobra o tempo). Em erro, apaga a
+ * particao. 0 = ok; detalhe em hdl_error() e no log.
  */
-int hdl_install(const char *iso_path, const IsoGameInfo *game, const char *title);
+int hdl_install(
+    const char *iso_path,
+    const IsoGameInfo *game,
+    const char *title,
+    int verify
+);
 
 const char *hdl_error(void);
 

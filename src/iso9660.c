@@ -33,12 +33,24 @@ static void iso_reason(IsoGameInfo *info, const char *reason)
 }
 
 
+/*
+ * Tenta duas vezes: no SMB a primeira leitura logo apos abrir
+ * ja falhou uma vez (a mesma ISO leu certo em seguida).
+ */
 static int iso_read_sector(int fd, unsigned int lba, unsigned char *buffer)
 {
-    if (lseek(fd, (off_t)lba * ISO_SECTOR_SIZE, SEEK_SET) < 0)
-        return 0;
+    int attempt;
 
-    return read(fd, buffer, ISO_SECTOR_SIZE) == ISO_SECTOR_SIZE;
+    for (attempt = 0; attempt < 2; attempt++) {
+
+        if (lseek(fd, (off_t)lba * ISO_SECTOR_SIZE, SEEK_SET) >= 0 &&
+            read(fd, buffer, ISO_SECTOR_SIZE) == ISO_SECTOR_SIZE)
+            return 1;
+
+        printf("FM ISO: falha ao ler setor %u (tentativa %d)\n", lba, attempt + 1);
+    }
+
+    return 0;
 }
 
 
@@ -223,8 +235,13 @@ int iso_probe_game(const char *path, IsoGameInfo *info)
     /*
      * Descritor primario: setor 16, tipo 1, "CD001".
      */
-    if (!iso_read_sector(fd, 16, sector) ||
-        sector[0] != 1 ||
+    if (!iso_read_sector(fd, 16, sector)) {
+        close(fd);
+        iso_reason(info, "erro de leitura");
+        return 0;
+    }
+
+    if (sector[0] != 1 ||
         memcmp(sector + 1, "CD001", 5) != 0) {
 
         close(fd);
