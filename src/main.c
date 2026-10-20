@@ -148,6 +148,7 @@ static int operation_menu_cursor = 0;
  */
 static IsoGameInfo hdl_games[HDL_MAX_GAMES];
 static char hdl_names[HDL_MAX_GAMES][FM_MAX_NAME];
+static char hdl_paths[HDL_MAX_GAMES][FM_MAX_PATH];
 static int hdl_count = 0;
 static int hdl_available = 0;
 static int hdl_partitions = 0;
@@ -1796,6 +1797,13 @@ static void hdl_check(void)
             game->game_id
         );
 
+        snprintf(
+            hdl_paths[hdl_count],
+            FM_MAX_PATH,
+            "%s",
+            entry->path
+        );
+
         printf(
             "FM HDL: %s | jogo %s | %s | %u setores | volume '%s' | nome '%s'\n",
             entry->path,
@@ -1918,12 +1926,10 @@ static void draw_hdl_info(void)
         hdl_partitions
     );
 
-    scr_printf("\nA gravacao do jogo sera a proxima etapa.\n\n");
+    scr_printf("\nCada jogo vira uma particao PP.<ID>.HDL.<nome>\n");
+    scr_printf("(gravada e conferida com a origem).\n\n");
 
-    scr_printf("TRIANGULO autoteste de gravacao no HDD\n");
-    scr_printf("          (cria, grava 130 MB, confere e\n");
-    scr_printf("           apaga uma particao de teste)\n");
-    scr_printf("O voltar\n");
+    scr_printf("X instalar | O voltar\n");
 }
 
 
@@ -1931,7 +1937,7 @@ static void draw_hdl_info(void)
  * Progresso da gravacao HDL (mesmo estilo do Colar): barra da
  * fase e barra total (gravar + conferir).
  */
-static const char *hdl_progress_title = "";
+static char hdl_progress_title[64];
 static clock_t hdl_progress_start;
 static clock_t hdl_progress_last;
 
@@ -2050,34 +2056,99 @@ static void hdl_progress_draw(
 }
 
 
-static void update_hdl_info(void)
+/*
+ * Instala os jogos reconhecidos, um por vez. Um erro nao impede
+ * os seguintes (a particao com erro e apagada em hdl_install).
+ */
+static void hdl_install_all(void)
 {
-    if (pressed(PAD_TRIANGLE)) {
+    char last_failure[96];
+    int installed = 0;
+    int failed = 0;
+    int i;
 
-        hdl_progress_title =
-            "Autoteste HDL: 130 MB na particao de teste";
 
-        hdl_set_progress(hdl_progress_draw);
+    last_failure[0] = '\0';
+
+    hdl_set_progress(hdl_progress_draw);
+
+    for (i = 0; i < hdl_count; i++) {
+
+        snprintf(
+            hdl_progress_title,
+            sizeof(hdl_progress_title),
+            "Instalando %d de %d: %s %.30s",
+            i + 1,
+            hdl_count,
+            hdl_games[i].game_id,
+            hdl_names[i]
+        );
+
+        if (hdl_install(
+                hdl_paths[i],
+                &hdl_games[i],
+                hdl_names[i]) == 0) {
+
+            installed++;
+
+        } else {
+
+            failed++;
+
+            snprintf(
+                last_failure,
+                sizeof(last_failure),
+                "%.20s: %s",
+                hdl_names[i],
+                hdl_error()
+            );
+        }
+    }
+
+    hdl_set_progress(NULL);
+
+
+    if (failed == 0) {
 
         snprintf(
             status_message,
             sizeof(status_message),
-            "Autoteste HDL %s: %s",
-            hdl_selftest() == 0 ? "OK" : "FALHOU",
-            hdl_error()
+            "HDLoader: %d jogo(s) instalado(s) e conferido(s).",
+            installed
         );
 
-        hdl_set_progress(NULL);
+    } else {
 
-        printf("FM STATUS: %s\n", status_message);
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "HDLoader: %d ok, %d erro | %s",
+            installed,
+            failed,
+            last_failure
+        );
+    }
+
+    printf("FM STATUS: %s\n", status_message);
+
+    fm_clear_selection(
+        &file_manager
+    );
+}
+
+
+static void update_hdl_info(void)
+{
+    if (pressed(PAD_CROSS)) {
 
         hdl_info_open = 0;
+
+        hdl_install_all();
 
         return;
     }
 
-    if (pressed(PAD_CIRCLE) ||
-        pressed(PAD_CROSS))
+    if (pressed(PAD_CIRCLE))
         hdl_info_open = 0;
 }
 

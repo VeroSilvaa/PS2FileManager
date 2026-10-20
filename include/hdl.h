@@ -1,11 +1,15 @@
 #ifndef PS2FILEMANAGER_HDL_H
 #define PS2FILEMANAGER_HDL_H
 
+#include "iso9660.h"
+
 /*
- * Instalacao HDLoader no HDD (APA).
+ * Instalacao HDLoader no HDD (APA), no formato que o OPL le:
  *
- * Dados do jogo gravados pelo hdlwrite.irx ("hdlw:"), particoes
- * criadas pelo ps2hdd-hdl.irx (tipo HDL).
+ * - particao "PP.SXXX-YYYZZ.HDL.<titulo>" do tipo HDL (0x1337),
+ *   criada pelo ps2hdd-hdl.irx, com subparticoes se precisar
+ * - cabecalho de 1 KB no offset 0x100000 da area de atributos
+ * - dados da ISO gravados pelo hdlwrite.irx ("hdlw:")
  */
 
 /*
@@ -29,11 +33,11 @@ void hdl_set_progress(HdlProgressFn fn);
 int hdl_init(void);
 
 /*
- * Autoteste do hdlwrite: cria uma particao HDL de teste (128 MB +
- * subparticao), grava 130 MB, rele e confere, e apaga a particao.
- * 0 = ok. Resultado detalhado em hdl_error() e no log.
+ * Instala a ISO: cria a particao, grava cabecalho e dados, confere
+ * relendo o HDD e comparando com a origem. Em erro, apaga a particao.
+ * 0 = ok; detalhe em hdl_error() e no log.
  */
-int hdl_selftest(void);
+int hdl_install(const char *iso_path, const IsoGameInfo *game, const char *title);
 
 const char *hdl_error(void);
 
