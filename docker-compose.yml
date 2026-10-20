@@ -1,0 +1,14 @@
+services:
+  ps2filemanager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: ps2filemanager-build
+
+    working_dir: /workspace
+
+    volumes:
+      - .:/workspace
+
+    command: make

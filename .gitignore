@@ -1,0 +1,19 @@
+﻿# Projetos de referencia (repositorios proprios, nao fazem parte do app)
+/wLaunchELF/
+/SMS/
+/PS2DVDPlayer/
+
+# Saidas de build
+*.o
+*.elf
+/irx/
+
+# Notas internas de desenvolvimento
+/PS2FileManager_Prompt_Desenvolvimento.md
+/função do mp3 player.md
+/Mockup*.png
+
+# Lixo do Windows / WSL
+*Zone.Identifier
+Thumbs.db
+desktop.ini
