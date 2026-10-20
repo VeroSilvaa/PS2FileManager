@@ -74,6 +74,13 @@ void osk_open(const char *title, const char *initial, int max_length)
 }
 
 
+void osk_focus_digits(void)
+{
+    osk_row = OSK_ROWS - 1;
+    osk_col = 0;
+}
+
+
 OskResult osk_update(unsigned int buttons)
 {
     if (buttons & PAD_UP) {

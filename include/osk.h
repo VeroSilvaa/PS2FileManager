@@ -21,6 +21,11 @@ typedef enum {
 void osk_open(const char *title, const char *initial, int max_length);
 
 /*
+ * Cursor na linha dos numeros (campos de IP).
+ */
+void osk_focus_digits(void);
+
+/*
  * buttons = botoes recem-pressionados (mascara PAD_* da libpad).
  */
 OskResult osk_update(unsigned int buttons);

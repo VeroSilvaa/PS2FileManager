@@ -35,6 +35,8 @@
 #include "iso9660.h"
 #include "hdl.h"
 #include "osk.h"
+#include "config.h"
+#include "settings.h"
 
 
 
@@ -80,20 +82,16 @@ extern unsigned int size_mcserv_irx;
 #define HDL_MAX_GAMES       16
 
 /*
- * SMB (Etapa 8). Fixo ate existir a tela de configuracao
- * (depende do teclado virtual da Etapa 4c). Mesmos dados
- * usados com sucesso no PS2DVDPlayer.
+ * SMB (Etapa 8): servidor, share, usuario e senha vem da
+ * configuracao (config.c, tela em settings.c).
  */
-#define SMB_SERVER          "192.168.1.9"
-#define SMB_SHARE           "samba"
-#define SMB_USER            "guest"
-#define SMB_PASSWORD        ""
 #define SMB_DHCP_TIMEOUT    20
 
-#define DEVICE_COUNT        6
+#define DEVICE_COUNT        7
 #define DEVICE_SMB          2
 #define DEVICE_HDD          3
 #define DEVICE_USB0         4   /* mass0:, DEVICE_USB0 + 1 = mass1: */
+#define DEVICE_CONFIG       6   /* nao e dispositivo: tela de configuracao */
 
 
 /* ============================================================
@@ -102,7 +100,8 @@ extern unsigned int size_mcserv_irx;
 
 typedef enum {
     SCREEN_DEVICES = 0,
-    SCREEN_FILES
+    SCREEN_FILES,
+    SCREEN_SETTINGS
 } AppScreen;
 
 
@@ -395,10 +394,34 @@ static void refresh_devices(void)
  * SMB: rede + conexao (Etapa 8)
  * ============================================================ */
 
+/*
+ * Pilha de rede carregada (uma unica vez).
+ */
+static int network_ready = 0;
+
+
+/*
+ * Aplica o modo de IP da configuracao (DHCP ou estatico).
+ */
+static int network_apply_config(void)
+{
+    const AppConfig *config = config_get();
+
+    if (config->dhcp)
+        return network_start_dhcp();
+
+    return network_apply_static(
+        config->ip,
+        config->netmask,
+        config->gateway,
+        config->dns
+    );
+}
+
+
 static int smb_ensure_connected(void)
 {
-    static int network_ready = 0;
-
+    const AppConfig *config;
     const NetworkInfo *net;
     const SMBInfo *smb;
 
@@ -413,19 +436,19 @@ static int smb_ensure_connected(void)
         return 1;
 
 
+    config = config_get();
+
     scr_clear();
 
     scr_printf("PS2FileManager\n");
     scr_printf("===============\n\n");
     scr_printf("Conectando ao SMB...\n\n");
-    scr_printf("Servidor: %s\n", SMB_SERVER);
-    scr_printf("Share   : %s\n", SMB_SHARE);
-    scr_printf("Usuario : %s\n\n", SMB_USER);
+    scr_printf("Servidor: %s\n", config->smb_server);
+    scr_printf("Share   : %s\n", config->smb_share);
+    scr_printf("Usuario : %s\n", config->smb_user);
+    scr_printf("Rede    : %s\n\n", config->dhcp ? "DHCP" : config->ip);
 
 
-    /*
-     * Pilha de rede: carregada uma unica vez.
-     */
     if (!network_ready) {
 
         scr_printf("Iniciando rede (DEV9/SMAP/PS2IP)...\n");
@@ -439,10 +462,12 @@ static int smb_ensure_connected(void)
             return 0;
         }
 
-        if (network_start_dhcp() < 0) {
+        if (network_apply_config() < 0) {
 
             set_status(
-                "ERRO rede: falha ao iniciar DHCP."
+                config->dhcp
+                    ? "ERRO rede: falha ao iniciar DHCP."
+                    : "ERRO rede: IP estatico invalido."
             );
 
             return 0;
@@ -452,7 +477,7 @@ static int smb_ensure_connected(void)
     }
 
 
-    scr_printf("Aguardando DHCP");
+    scr_printf(config->dhcp ? "Aguardando DHCP" : "Aguardando link");
 
     start = clock();
     seconds = 0;
@@ -464,7 +489,7 @@ static int smb_ensure_connected(void)
         net = network_get_info();
 
         if (net->link_up &&
-            net->dhcp_bound &&
+            (net->dhcp_bound || !config->dhcp) &&
             strcmp(net->ip, "0.0.0.0") != 0)
             break;
 
@@ -474,7 +499,8 @@ static int smb_ensure_connected(void)
             snprintf(
                 status_message,
                 sizeof(status_message),
-                "ERRO: DHCP sem resposta em %ds (link %s)",
+                "ERRO: %s em %ds (link %s)",
+                config->dhcp ? "DHCP sem resposta" : "rede nao pronta",
                 SMB_DHCP_TIMEOUT,
                 net->link_up ? "OK" : "DESLIGADO"
             );
@@ -513,10 +539,10 @@ static int smb_ensure_connected(void)
 
     if (smb_init() < 0 ||
         smb_connect(
-            SMB_SERVER,
-            SMB_SHARE,
-            SMB_USER,
-            SMB_PASSWORD) < 0) {
+            config->smb_server,
+            config->smb_share,
+            config->smb_user,
+            config->smb_password) < 0) {
 
         snprintf(
             status_message,
@@ -553,8 +579,8 @@ static void open_smb(void)
         status_message,
         sizeof(status_message),
         "Aberto: smb0:/ (%s em %s)",
-        SMB_SHARE,
-        SMB_SERVER
+        config_get()->smb_share,
+        config_get()->smb_server
     );
 }
 
@@ -839,6 +865,15 @@ static void open_usb(int unit)
 static void open_device(int device)
 {
     char path[16];
+
+    if (device == DEVICE_CONFIG) {
+
+        settings_open();
+
+        current_screen = SCREEN_SETTINGS;
+
+        return;
+    }
 
     if (device >= DEVICE_USB0) {
 
@@ -3193,6 +3228,59 @@ static void update_device_screen(void)
 
 
 /* ============================================================
+ * Tela de configuracao de rede e SMB
+ * ============================================================ */
+
+static void update_settings_screen(void)
+{
+    SettingsResult result;
+
+
+    result = settings_update(new_pad & ~old_pad);
+
+    if (result == SETTINGS_OPEN)
+        return;
+
+
+    current_screen = SCREEN_DEVICES;
+
+    if (result == SETTINGS_CANCELLED) {
+
+        set_status("Configuracao: nada alterado.");
+
+        return;
+    }
+
+
+    /*
+     * SMB reconecta com os dados novos na proxima abertura;
+     * com a rede ja carregada, o modo de IP vale na hora.
+     */
+    smb_disconnect();
+
+    if (network_ready && network_apply_config() < 0)
+        printf("FM CONFIG: falha ao aplicar a rede\n");
+
+
+    if (result == SETTINGS_SAVED) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "Configuracao salva em %s",
+            config_path()
+        );
+
+    } else {
+
+        set_status(
+            "Configuracao aplicada, mas NAO gravada no Memory Card."
+        );
+    }
+}
+
+
+/* ============================================================
  * Tela do gerenciador
  * ============================================================ */
 
@@ -3474,10 +3562,12 @@ static void draw_device_screen(void)
 
 
     scr_printf(
-        "Rede SMB (smb0:) [%s]\n",
+        "Rede SMB (smb0:) [%s%s/%s]\n",
         smb_get_info()->connected
-            ? "CONECTADO"
-            : SMB_SERVER "/" SMB_SHARE
+            ? "CONECTADO "
+            : "",
+        config_get()->smb_server,
+        config_get()->smb_share
     );
 
     if (device_cursor == DEVICE_HDD)
@@ -3513,6 +3603,12 @@ static void draw_device_screen(void)
                     : "AUSENTE"
         );
     }
+
+    scr_printf(
+        "\n%sConfiguracoes de rede e SMB [%s]\n",
+        device_cursor == DEVICE_CONFIG ? "> " : "  ",
+        config_get()->dhcp ? "DHCP" : config_get()->ip
+    );
 
     scr_printf(
         "\n\n"
@@ -3830,6 +3926,12 @@ static void draw_screen(void)
 
         draw_device_screen();
 
+    } else if (current_screen == SCREEN_SETTINGS) {
+
+        scr_clear();
+
+        settings_draw();
+
     } else {
 
         draw_file_screen();
@@ -3903,6 +4005,12 @@ static int initialize(void)
     refresh_devices();
 
 
+    /*
+     * Rede/SMB: mc0:/PS2FM/network.cfg (ou mc1:), senao padrao.
+     */
+    config_load();
+
+
     set_status(
         "PS2FileManager pronto."
     );
@@ -3972,6 +4080,8 @@ int main(int argc, char *argv[])
          */
         if (current_screen == SCREEN_DEVICES) {
             update_device_screen();
+        } else if (current_screen == SCREEN_SETTINGS) {
+            update_settings_screen();
         } else {
             update_file_screen();
         }
