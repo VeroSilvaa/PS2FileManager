@@ -17,3 +17,6 @@
 *Zone.Identifier
 Thumbs.db
 desktop.ini
+
+# Contexto local do Claude Code
+/CLAUDE.md
