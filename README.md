@@ -27,6 +27,28 @@ Mover = cópia verificada → conferência dos totais (arquivos e bytes) → exc
 - Progresso em tempo real: barras por arquivo e total, velocidade e tempo restante
 - Confirmação em tela cheia antes de excluir/mover
 - Proteção dos arquivos de sistema dos saves (`icon.sys`, `*.icn`, `B?DATA-SYSTEM`)
+- **Instalação de jogos no HDD no formato HDLoader** (compatível com o OPL), veja abaixo
+
+## Instalar jogos no HDD (HDLoader)
+
+Instala ISOs de jogos de PS2 que estejam no **USB** ou no **SMB** diretamente no HDD interno (APA), no formato que o **Open PS2 Loader** lista no modo HDD.
+
+1. Marque uma ou mais ISOs com **Quadrado** e aperte **R1**.
+2. Escolha **Instalar no HDD (HDLoader)**. A opção só fica disponível se todos os itens marcados forem ISOs de jogo de PS2 (o ID é lido do `SYSTEM.CNF`) e houver um HDD formatado em APA.
+3. Confira a lista de jogos (ID, CD/DVD, tamanho) e aperte **X** para instalar.
+
+Cada jogo vira uma partição `PP.<ID>.HDL.<nome>`, com subpartições quando ele não cabe numa só. Depois da gravação, o app:
+
+- relê o HDD e compara com a ISO de origem;
+- lê o jogo **do mesmo jeito que o OPL**, pelo cabeçalho HDL e pelos LBAs do disco, e compara setores de cada fatia.
+
+Se qualquer etapa falhar, a partição incompleta é apagada. Um jogo já instalado (mesmo ID) não é gravado de novo, só conferido.
+
+Limitações atuais:
+
+- **DVD de duas camadas (DVD9)** ainda não é suportado.
+- Pelo SMB a instalação é lenta, porque grava e depois confere a ISO inteira.
+- Testado no PCSX2: o jogo aparece no OPL. Rodar o jogo pelo OPL **ainda não foi testado em console real**.
 
 ## Controles
 
@@ -49,7 +71,10 @@ Requer [Docker](https://www.docker.com/). A imagem usa o toolchain oficial `ghcr
 docker compose run --rm ps2filemanager make
 ```
 
-O resultado é `PS2FileManager.elf`. Os módulos IOP (IRX) do PS2SDK são embutidos no ELF durante a compilação.
+O resultado é `PS2FileManager.elf`. Os módulos IOP (IRX) do PS2SDK são embutidos no ELF durante a compilação, junto com dois módulos compilados pelo próprio projeto:
+
+- `iop/ps2hdd-hdl`: o driver APA do PS2SDK, sem modificações no código, compilado com o suporte a partições HDLoader (que no PS2SDK só existe na versão para PC).
+- `iop/hdlwrite`: grava os dados do jogo nas fatias da partição HDLoader.
 
 ## Testar no PCSX2
 
@@ -93,7 +118,7 @@ Requisitos do servidor:
 
 ## Planejado
 
-- Instalar ISOs de jogos no HDD no formato HDLoader (compatível com o OPL)
+- HDLoader: DVD de duas camadas e conferência completa opcional
 - Criar pasta e renomear com teclado virtual (e tela de configuração do SMB)
 - Formatação de pendrive/HDD
 - Interface gráfica 640×448 com gsKit
@@ -102,8 +127,9 @@ Requisitos do servidor:
 ## Créditos
 
 - [PS2SDK / ps2dev](https://github.com/ps2dev) — toolchain e módulos IOP
-- [wLaunchELF](https://github.com/ps2homebrew/wLaunchELF) e [Open PS2 Loader](https://github.com/ps2homebrew/Open-PS2-Loader) — referência de inicialização do IOP, HDD e USB
+- [wLaunchELF](https://github.com/ps2homebrew/wLaunchELF) e [Open PS2 Loader](https://github.com/ps2homebrew/Open-PS2-Loader) — referência de inicialização do IOP, HDD, USB e do formato HDLoader
+- [HDLGameInstaller](https://github.com/ps2homebrew/HDLGameInstaller) e [hdl-dump](https://github.com/ps2homebrew/hdl-dump) — referência do formato HDLoader (nenhum código copiado)
 
 ## Licença
 
-[MIT](LICENSE)
+[MIT](LICENSE), exceto `iop/ps2hdd-hdl/`, que é código do PS2SDK sob a Academic Free License 2.0 ([LICENSE-PS2SDK](iop/ps2hdd-hdl/LICENSE-PS2SDK)).
