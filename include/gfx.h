@@ -68,6 +68,11 @@ void gfx_text_fit(float x, float y, float max_w, const char *text, gfx_color col
 
 void gfx_text_right(float right, float y, const char *text, gfx_color color);
 
+/*
+ * Logo "PS2FileManager" (Orbitron, assets/logo.png), ~218x34.
+ */
+void gfx_logo(float x, float y);
+
 void gfx_line(float x1, float y1, float x2, float y2, gfx_color color);
 
 void gfx_triangle(float x1, float y1, float x2, float y2, float x3, float y3, gfx_color color);

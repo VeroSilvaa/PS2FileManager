@@ -140,11 +140,64 @@ def make_sans():
     print("fonte sans: atlas %dx%d" % (atlas.width, atlas.height))
 
 
+FONT_LOGO = os.path.join(ROOT, "third_party", "fonts", "Orbitron.ttf")
+
+
+def make_logo():
+    """
+    assets/logo.png: "PS2FileManager" em Orbitron (OFL) com gradiente
+    azul e brilho, fundo transparente. Desenhado em 4x e reduzido
+    (suavizacao). Nao usa o logotipo oficial "PS2".
+    """
+    from PIL import ImageFilter
+
+    scale = 4
+    size = 22 * scale
+    text = "PS2FileManager"
+
+    font = ImageFont.truetype(FONT_LOGO, size)
+    try:
+        font.set_variation_by_name("Bold")
+    except Exception:
+        pass
+
+    left, top, right, bottom = font.getbbox(text)
+    pad = 6 * scale
+    w = right - left + 2 * pad
+    h = bottom - top + 2 * pad
+
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).text((pad - left, pad - top), text, fill=255, font=font)
+
+    # Gradiente vertical: azul claro -> azul do tema.
+    grad = Image.new("RGB", (w, h))
+    gd = ImageDraw.Draw(grad)
+    top_c, bottom_c = (0xE8, 0xF2, 0xFF), (0x2F, 0x7B, 0xFF)
+    for y in range(h):
+        t = y / max(1, h - 1)
+        gd.line([(0, y), (w, y)], fill=tuple(round(a + (b - a) * t) for a, b in zip(top_c, bottom_c)))
+
+    # Brilho: o texto borrado, azul, por baixo.
+    glow_alpha = mask.filter(ImageFilter.GaussianBlur(4 * scale)).point(lambda v: min(255, v * 2) * 0.55)
+    glow = Image.new("RGBA", (w, h), (0x2F, 0x7B, 0xFF, 0))
+    glow.putalpha(glow_alpha.convert("L"))
+
+    letters = grad.convert("RGBA")
+    letters.putalpha(mask)
+
+    logo = Image.alpha_composite(glow, letters)
+    logo = logo.resize((w // scale, h // scale), Image.LANCZOS)
+    logo.save(os.path.join(ASSETS, "logo.png"), optimize=True)
+
+    print("logo: %dx%d" % logo.size)
+
+
 def main():
     os.makedirs(ASSETS, exist_ok=True)
     make_background()
     make_font()
     make_sans()
+    make_logo()
     return 0
 
 

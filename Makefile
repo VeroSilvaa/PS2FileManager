@@ -25,7 +25,7 @@ IRX_OBJS += irx/AUDSRV_irx.o
 EE_OBJS += $(IRX_OBJS)
 
 # Interface grafica: PNGs de assets/ (tools/make_assets.sh) embutidos
-ASSET_OBJS = irx/bg_png.o irx/font_mono_png.o irx/font_sans_png.o
+ASSET_OBJS = irx/bg_png.o irx/font_mono_png.o irx/font_sans_png.o irx/logo_png.o
 EE_OBJS += $(ASSET_OBJS)
 
 EE_INCS = -I$(PS2SDK)/ee/include -I$(PS2SDK)/common/include -I$(PS2SDK)/ports/include \
@@ -58,6 +58,10 @@ irx/font_mono_png.c: assets/font_mono_8x16.png
 irx/font_sans_png.c: assets/font_sans_14.png
 	@mkdir -p irx
 	bin2c $< $@ font_sans_png
+
+irx/logo_png.c: assets/logo.png
+	@mkdir -p irx
+	bin2c $< $@ logo_png
 
 src/gfx.o: assets/font_sans_14.h
 

@@ -5597,7 +5597,7 @@ static void gui_header(void)
 {
     char line[96];
 
-    gfx_text(UI_DEV_X + 2, 20, "PS2FileManager", UI_TEXT);
+    gfx_logo(UI_DEV_X - 6, 12);
 
     /*
      * Direita: a musica tocando, senao o IP (rede ligada).

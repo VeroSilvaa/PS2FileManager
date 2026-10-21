@@ -26,6 +26,9 @@ extern unsigned int size_font_mono_png;
 extern unsigned char font_sans_png[];
 extern unsigned int size_font_sans_png;
 
+extern unsigned char logo_png[];
+extern unsigned int size_logo_png;
+
 #define SCREEN_W        640
 #define SCREEN_H        448
 
@@ -46,6 +49,7 @@ static GSGLOBAL *gs;
 static GSTEXTURE background;
 static GSTEXTURE font;
 static GSTEXTURE sans;
+static GSTEXTURE logo;
 
 /*
  * Tela convertida (desenha o quadro) ou NULL (camada de texto).
@@ -82,6 +86,35 @@ static int load_background(void)
     background.PSM = GS_PSM_CT32;
     background.Filter = GS_FILTER_LINEAR;
     background.Vram = 0;
+
+    return 0;
+}
+
+
+/*
+ * Imagem RGBA com transparencia (alfa 0..255 -> 0..128 do GS).
+ */
+static int load_rgba(const unsigned char *png, unsigned int size, GSTEXTURE *tex)
+{
+    unsigned char *pixels;
+    int w;
+    int h;
+    int i;
+
+    pixels = png_decode(png, size, 4, &w, &h);
+
+    if (!pixels)
+        return -1;
+
+    for (i = 0; i < w * h; i++)
+        pixels[i * 4 + 3] = (unsigned char)((pixels[i * 4 + 3] + 1) >> 1);
+
+    tex->Mem = (u32 *)pixels;
+    tex->Width = w;
+    tex->Height = h;
+    tex->PSM = GS_PSM_CT32;
+    tex->Filter = GS_FILTER_NEAREST;
+    tex->Vram = 0;
 
     return 0;
 }
@@ -179,6 +212,14 @@ int gfx_init(void)
 
     if (load_font(font_sans_png, size_font_sans_png, &sans) < 0)
         printf("FM GFX: fonte sans nao carregou\n");
+
+    if (load_rgba(logo_png, size_logo_png, &logo) < 0)
+        printf("FM GFX: logo nao carregou\n");
+
+    /*
+     * Em PAL a imagem e esticada na vertical: filtro suave.
+     */
+    logo.Filter = GS_FILTER_LINEAR;
 
     ready = 1;
 
@@ -461,6 +502,21 @@ void gfx_text_fit(float x, float y, float max_w, const char *text, gfx_color col
 void gfx_text_right(float right, float y, const char *text, gfx_color color)
 {
     draw_sans(right - gfx_text_width(text), y, text, -1, color);
+}
+
+
+void gfx_logo(float x, float y)
+{
+    if (!logo.Mem)
+        return;
+
+    gsKit_TexManager_bind(gs, &logo);
+
+    gsKit_prim_sprite_texture(gs, &logo,
+                              x, y * scale_y, 0, 0,
+                              x + logo.Width, (y + logo.Height) * scale_y,
+                              logo.Width, logo.Height,
+                              2, COLOR_WHITE);
 }
 
 
