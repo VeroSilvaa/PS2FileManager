@@ -1596,6 +1596,47 @@ typedef struct {
 static GuiProgress gprog;
 
 static void draw_gui_progress(void);
+
+/*
+ * Janela "trabalhando" (formatacao, particoes): texto e, se houver,
+ * as etapas. Desenhada por draw_gui_busy.
+ */
+typedef struct {
+    char title[64];
+    char text[128];
+    char detail[128];
+    int step;
+    int total;          /* 0 = sem barra de etapas */
+} GuiBusy;
+
+static GuiBusy gbusy;
+
+static void draw_gui_busy(void);
+
+
+static void busy_show(const char *title, const char *text, const char *detail, int step, int total)
+{
+    snprintf(gbusy.title, sizeof(gbusy.title), "%s", title);
+    snprintf(gbusy.text, sizeof(gbusy.text), "%s", text);
+    snprintf(gbusy.detail, sizeof(gbusy.detail), "%s", detail ? detail : "");
+
+    gbusy.step = step;
+    gbusy.total = total;
+
+    gfx_set_screen(draw_gui_busy);
+    gfx_frame();
+}
+
+
+/*
+ * Troca so a linha de detalhe da janela aberta.
+ */
+static void busy_detail(const char *detail)
+{
+    snprintf(gbusy.detail, sizeof(gbusy.detail), "%s", detail);
+
+    gfx_frame();
+}
 static int gui_current_device(void);
 
 
@@ -2867,11 +2908,12 @@ static void create_partition(void)
     int result;
 
 
-    scr_clear();
+    {
+        char text[96];
 
-    scr_printf("PS2FileManager\n");
-    scr_printf("===============\n\n");
-    scr_printf("Criando particao %s (%u MB)...\n", partition_name, partition_size_mb);
+        snprintf(text, sizeof(text), "%s, %u MB (PFS)", partition_name, partition_size_mb);
+        busy_show("Criando partição", text, NULL, 0, 0);
+    }
 
 
     result = hdd_create_partition(partition_name, partition_size_mb);
@@ -2984,6 +3026,8 @@ static void delete_partition(void)
         strcmp(hdd_partition_of(clipboard.paths[0]), partition_name) == 0)
         clipboard_clear(&clipboard);
 
+
+    busy_show("Excluindo partição", partition_name, NULL, 0, 0);
 
     result = hdd_remove_partition(partition_name);
 
@@ -3900,7 +3944,7 @@ static void format_build_menu(void)
         /*
          * HDD APA (ou vazio): APA, ou tabela para exFAT/FAT32 (OPL).
          */
-        format_add_option("APA (padrao PS2)", FORMAT_ACT_APA);
+        format_add_option("APA (padrão PS2)", FORMAT_ACT_APA);
         format_add_option("Criar tabela MBR (exFAT/FAT32)", FORMAT_ACT_TABLE_MBR);
         format_add_option("Criar tabela GPT (exFAT/FAT32)", FORMAT_ACT_TABLE_GPT);
 
@@ -3922,7 +3966,7 @@ static void format_build_menu(void)
      * HDD em MBR/GPT: voltar ao padrao do PS2.
      */
     if (format_hdd_fat)
-        format_add_option("APA (padrao PS2, apaga tudo)", FORMAT_ACT_APA);
+        format_add_option("APA (padrão PS2, apaga tudo)", FORMAT_ACT_APA);
 
     format_add_option("Cancelar", FORMAT_ACT_CANCEL);
 }
@@ -4061,21 +4105,8 @@ static void start_format(void)
  */
 static void format_step_draw(int step, int total, const char *what)
 {
-    draw_progress_bar(
-        6,
-        "Etapas",
-        (unsigned long long)step,
-        (unsigned long long)total
-    );
-
-    scr_setXY(0, 8);
-
-    scr_printf(
-        "Etapa %d de %d: %-30s\n",
-        step < total ? step + 1 : total,
-        total,
-        what
-    );
+    busy_show("Formatando o HDD em APA", "Criando __mbr, __net, __system, __sysconf e __common.",
+              what, step, total);
 
     printf("FM FORMAT: etapa %d/%d %s\n", step, total, what);
 }
@@ -4086,12 +4117,7 @@ static void run_format_apa(void)
     int result;
 
 
-    scr_clear();
-
-    scr_printf("PS2FileManager\n");
-    scr_printf("===============\n\n");
-    scr_printf("FORMATANDO O HDD EM APA...\n");
-    scr_printf("Nao desligue o console.\n");
+    busy_show("Formatando o HDD em APA", "Preparando o disco…", NULL, 0, 0);
 
 
     /*
@@ -4164,17 +4190,16 @@ static void run_format_usb(void)
     mp3player_stop();
 
 
-    scr_clear();
+    {
+        char title[64];
+        char text[96];
 
-    scr_printf("PS2FileManager\n");
-    scr_printf("===============\n\n");
-    scr_printf(
-        "%s%u: %s...\n\n",
-        disk->name,
-        disk->dev_nr,
-        format_action_text(format_chosen)
-    );
-    scr_printf(format_usb ? "Aguarde. Nao remova o pendrive.\n" : "Aguarde. Nao desligue o console.\n");
+        snprintf(title, sizeof(title), "%s: %s", format_usb ? "Pendrive" : "HDD interno",
+                 format_action_text(format_chosen));
+        snprintf(text, sizeof(text), "Disco %s%u, %u MB.", disk->name, disk->dev_nr, usbfmt_size_mb(disk));
+
+        busy_show(title, text, format_usb ? "Não remova o pendrive." : NULL, 0, 0);
+    }
 
 
     /*
@@ -4213,7 +4238,7 @@ static void run_format_usb(void)
 
     if (format_usb) {
 
-        scr_printf("\nEsperando o pendrive montar de novo...\n");
+        busy_detail("Esperando o pendrive montar de novo…");
 
         usb_wait_mount();
 
@@ -4229,7 +4254,7 @@ static void run_format_usb(void)
             hdd_set_layout(format_chosen == FORMAT_ACT_TABLE_GPT ? FATFMT_TABLE_GPT : FATFMT_TABLE_MBR);
 
         if (result == 0 && !is_table) {
-            scr_printf("\nEsperando o HDD montar...\n");
+            busy_detail("Esperando o HDD montar…");
             hdd_fat_mounted();
         }
     }
@@ -4286,6 +4311,8 @@ static void run_format_hdd_apa(void)
 
         if (clipboard.count > 0 && strncmp(clipboard.paths[0], "ata", 3) == 0)
             clipboard_clear(&clipboard);
+
+        busy_show("Formatando o HDD em APA", "Apagando as tabelas MBR/GPT…", NULL, 0, 0);
 
         result = usbfmt_wipe(&format_disks[0]);
 
@@ -6238,6 +6265,354 @@ static void draw_gui_progress(void)
 
 
 /*
+ * Trabalhando (formatacao, particoes): texto, detalhe, etapas.
+ */
+static void draw_gui_busy(void)
+{
+    float x = 110;
+    float w = 420;
+    float y;
+    char line[48];
+    int i;
+
+    gui_header();
+
+    y = gui_window(x, 120, w, 200, gbusy.title);
+
+    /*
+     * Circulo de pontos girando (enquanto houver quadros).
+     */
+    for (i = 0; i < 8; i++) {
+
+        static const float dx[8] = { 0, 7, 10, 7, 0, -7, -10, -7 };
+        static const float dy[8] = { -10, -7, 0, 7, 10, 7, 0, -7 };
+        int lit = (int)(clock() / (CLOCKS_PER_SEC / 10)) % 8;
+        int age = (i - lit + 8) % 8;
+
+        gfx_rect(x + 34 + dx[i] - 2, y + 18 + dy[i] - 2, 4, 4,
+                 age == 0 ? UI_TEXT : age < 3 ? UI_SEL_BOTTOM : UI_SEL_DIM);
+    }
+
+    gfx_text_fit(x + 60, y + 2, w - 76, gbusy.text, UI_TEXT);
+    gfx_text_fit(x + 60, y + 24, w - 76, gbusy.detail, UI_WARNING);
+
+    y += 62;
+
+    if (gbusy.total > 0) {
+
+        snprintf(line, sizeof(line), "Etapa %d de %d",
+                 gbusy.step < gbusy.total ? gbusy.step + 1 : gbusy.total, gbusy.total);
+        gfx_text(x + 16, y, line, UI_TEXT2);
+
+        gui_bar(x + 16, y + 24, w - 96, gbusy.step, gbusy.total);
+    }
+
+    gfx_text(x + 16, 120 + 200 - 30, "Aguarde. Não desligue o console nem remova a mídia.", UI_TEXT_OFF);
+}
+
+
+/*
+ * Formatacao (lista de dispositivos, R1): disco, formato e as duas
+ * confirmacoes.
+ */
+#define FMT_X   88
+#define FMT_W   464
+
+static void gui_format_info(float x, float *y)
+{
+    char line[96];
+
+    if (format_usb || format_hdd_fat) {
+
+        const fatfmt_disk_t *disk = &format_disks[format_disk];
+
+        snprintf(line, sizeof(line), "%u MB", usbfmt_size_mb(disk));
+        gfx_text(x, *y, "Capacidade", UI_TEXT2);
+        gfx_text(x + 120, *y, line, UI_TEXT);
+
+        gfx_text(x, *y + 20, "Tabela", UI_TEXT2);
+        gfx_text(x + 120, *y + 20, usbfmt_table_name(disk->table), UI_TEXT);
+
+        gfx_text(x, *y + 40, "Formato", UI_TEXT2);
+        gfx_text(x + 120, *y + 40, usbfmt_fs_name(disk->fs), UI_TEXT);
+
+    } else {
+
+        snprintf(line, sizeof(line), "%u MB", format_total_mb);
+        gfx_text(x, *y, "Capacidade", UI_TEXT2);
+        gfx_text(x + 120, *y, line, UI_TEXT);
+
+        gfx_text(x, *y + 20, "Tabela", UI_TEXT2);
+        gfx_text(x + 120, *y + 20, format_formatted ? "APA" : "sem formato APA", UI_TEXT);
+
+        snprintf(line, sizeof(line), "%d partição(ões)", format_partitions);
+        gfx_text(x, *y + 40, "Partições", UI_TEXT2);
+        gfx_text(x + 120, *y + 40, format_formatted ? line : "-", UI_TEXT);
+    }
+
+    *y += 70;
+}
+
+
+static void gui_format(void)
+{
+    const fatfmt_disk_t *disk = &format_disks[format_disk];
+    float x = FMT_X + 16;
+    float w = FMT_W - 32;
+    float y;
+    float by = 382;
+    char title[80];
+    int i;
+
+
+    if (format_step == FORMAT_DISKS) {
+
+        y = gui_window(FMT_X, 60, FMT_W, 340, "Formatar pendrive: escolha o disco");
+
+        for (i = 0; i < format_disk_count; i++) {
+
+            char line[64];
+            const fatfmt_disk_t *d = &format_disks[i];
+            float row = y + i * 26;
+
+            if (i == format_disk)
+                gui_selection(x - 6, row - 2, w + 12, 24, 1);
+
+            snprintf(line, sizeof(line), "%s%u", d->name, d->dev_nr);
+            gfx_text(x, row, line, UI_TEXT);
+
+            snprintf(line, sizeof(line), "%u MB", usbfmt_size_mb(d));
+            gfx_text_right(x + 190, row, line, UI_TEXT);
+
+            gfx_text(x + 220, row, usbfmt_table_name(d->table), UI_TEXT2);
+            gfx_text(x + 310, row, usbfmt_fs_name(d->fs), UI_TEXT2);
+        }
+
+        gfx_text_fit(x, 320, w, "O número (usb0, usb1) é o do BDM: pode não bater com", UI_TEXT_OFF);
+        gfx_text_fit(x, 340, w, "o usb0:/usb1: da lista (ordem de montagem).", UI_TEXT_OFF);
+
+        i = gfx_button_hint(x, by, GFX_BTN_CROSS, "Escolher");
+        gfx_button_hint(x + i, by, GFX_BTN_CIRCLE, "Cancelar");
+
+        return;
+    }
+
+
+    if (format_usb)
+        snprintf(title, sizeof(title), "Formatar: pendrive %s%u", disk->name, disk->dev_nr);
+    else
+        snprintf(title, sizeof(title), "Formatar: HDD interno");
+
+    y = gui_window(FMT_X, 60, FMT_W, 340, title);
+
+    gui_format_info(x, &y);
+
+
+    if (format_step == FORMAT_MENU) {
+
+        if ((format_usb || format_hdd_fat) && disk->table == FATFMT_TABLE_NONE) {
+            gfx_text_fit(x, y - 4, w, "A mídia não tem tabela de partições (MBR ou GPT).", UI_WARNING);
+            y += 20;
+        }
+
+        for (i = 0; i < format_option_count; i++) {
+
+            float row = y + i * 26;
+            int cancel = format_actions[i] == FORMAT_ACT_CANCEL;
+
+            if (i == format_cursor)
+                gui_selection(x - 6, row - 2, w + 12, 24, 1);
+
+            gfx_text_fit(x + 4, row, w - 8, format_labels[i], cancel ? UI_TEXT2 : UI_TEXT);
+        }
+
+        i = gfx_button_hint(x, by, GFX_BTN_CROSS, "Escolher");
+        gfx_button_hint(x + i, by, GFX_BTN_CIRCLE, "Cancelar");
+
+        return;
+    }
+
+
+    /*
+     * Confirmacoes: o que vai acontecer, em vermelho.
+     */
+    {
+        char line[96];
+        const char *what;
+        const char *lines[3] = { NULL, NULL, NULL };
+
+        snprintf(line, sizeof(line), "Ação: %s", format_action_text(format_chosen));
+        gfx_text(x, y, line, UI_TEXT);
+
+        y += 28;
+
+        gfx_rect(x - 6, y - 4, w + 12, 90, gfx_rgba(0x40, 0x08, 0x10, 0x50));
+        gfx_border(x - 6, y - 4, w + 12, 90, 1, UI_ERROR);
+
+        if (format_chosen == FORMAT_ACT_APA) {
+            what = "TODOS OS DADOS DO HDD SERÃO APAGADOS.";
+            lines[0] = format_hdd_fat ? "As tabelas MBR/GPT são zeradas e o HDD volta ao"
+                                      : "Partições, jogos HDLoader, saves do __common: tudo.";
+            lines[1] = format_hdd_fat ? "padrão do PS2 (APA)." : "Serão criados __mbr, __net, __system, __sysconf";
+            lines[2] = format_hdd_fat ? NULL : "e __common (PFS), como o wLaunchELF.";
+        } else if (format_chosen == FORMAT_ACT_TABLE_MBR || format_chosen == FORMAT_ACT_TABLE_GPT) {
+            what = format_usb ? "TODOS OS DADOS DO PENDRIVE SERÃO APAGADOS."
+                              : "TODOS OS DADOS DO HDD SERÃO APAGADOS (APA, jogos).";
+            lines[0] = "Será criada uma partição no disco inteiro;";
+            lines[1] = "depois formate em FAT32 ou exFAT.";
+        } else {
+            what = "TODOS OS DADOS DA PARTIÇÃO SERÃO APAGADOS.";
+        }
+
+        gfx_text_fit(x, y, w, what, UI_ERROR);
+
+        for (i = 0; i < 3; i++)
+            if (lines[i])
+                gfx_text_fit(x, y + 22 + i * 20, w, lines[i], UI_TEXT);
+
+        y += 100;
+
+        if (format_step == FORMAT_CONFIRM2)
+            gfx_text(x, y, "ÚLTIMA CONFIRMAÇÃO.", UI_WARNING);
+    }
+
+    if (format_step == FORMAT_CONFIRM)
+        i = gfx_button_hint(x, by, GFX_BTN_TRIANGLE, "Continuar");
+    else
+        i = gfx_button_hint(x, by, GFX_BTN_START, "Executar agora");
+
+    gfx_button_hint(x + i, by, GFX_BTN_CIRCLE, "Cancelar");
+}
+
+
+/*
+ * Particoes do HDD (R1 na lista hdd0:): menu, tamanho, excluir.
+ */
+static void gui_partition(void)
+{
+    float x;
+    float w;
+    float y;
+    char line[96];
+    int i;
+
+
+    if (partition_step == PARTITION_MENU) {
+
+        static const char *items[PARTITION_MENU_COUNT] = { "Criar partição", "Excluir partição", "Cancelar" };
+
+        x = 392;
+        w = 216;
+        y = gui_window(x, 64, w, 38 + PARTITION_MENU_COUNT * 26 + 84, "Partições");
+
+        for (i = 0; i < PARTITION_MENU_COUNT; i++) {
+
+            float row = y + i * 26;
+
+            if (i == partition_cursor)
+                gui_selection(x + 6, row - 2, w - 12, 24, 1);
+
+            gfx_text(x + 16, row, items[i], i == PARTITION_MENU_COUNT - 1 ? UI_TEXT2 : UI_TEXT);
+        }
+
+        y += PARTITION_MENU_COUNT * 26 + 2;
+
+        gfx_text_fit(x + 12, y, w - 24, "Excluir: a selecionada ou,", UI_TEXT_OFF);
+        gfx_text_fit(x + 12, y + 18, w - 24, "sem seleção, a do cursor.", UI_TEXT_OFF);
+
+        y += 46;
+
+        gfx_button_hint(x + 12, y, GFX_BTN_CROSS, "OK");
+        gfx_button_hint(x + 92, y, GFX_BTN_CIRCLE, "Fechar");
+
+        return;
+    }
+
+
+    x = 110;
+    w = 420;
+
+    if (partition_step == PARTITION_CONFIRM_DELETE) {
+
+        y = gui_window(x, 100, w, 230, "Excluir partição?");
+
+        gfx_text_fit(x + 16, y, w - 32, partition_name, UI_WARNING);
+
+        y += 32;
+
+        gfx_text_fit(x + 16, y, w - 32, "A partição e as subpartições serão apagadas com", UI_ERROR);
+        gfx_text_fit(x + 16, y + 20, w - 32, "TODO o conteúdo (arquivos ou jogo HDLoader).", UI_ERROR);
+        gfx_text_fit(x + 16, y + 40, w - 32, "Não pode ser desfeito.", UI_TEXT);
+
+        if (strncmp(status_message, "Excluir particao", 16) == 0)
+            gfx_text_fit(x + 16, y + 68, w - 32, status_message, UI_WARNING);
+
+        y = 100 + 230 - 34;
+
+        i = gfx_button_hint(x + 16, y, GFX_BTN_TRIANGLE, "Excluir");
+        gfx_button_hint(x + 16 + i, y, GFX_BTN_CIRCLE, "Cancelar");
+
+        return;
+    }
+
+
+    /*
+     * Tamanho: barra de 0 ao maximo livre; ESQ/DIR 128 MB, L1/R1 1 GB.
+     */
+    snprintf(line, sizeof(line), "Criar partição: %s", partition_name);
+
+    y = gui_window(x, 84, w, 280, line);
+
+    if (partition_size_mb >= 1024)
+        snprintf(line, sizeof(line), "%u MB  (%u,%u GB)", partition_size_mb,
+                 partition_size_mb / 1024, partition_size_mb % 1024 * 10 / 1024);
+    else
+        snprintf(line, sizeof(line), "%u MB", partition_size_mb);
+
+    gfx_text(x + (w - gfx_text_width(line)) / 2, y + 4, line, UI_TEXT);
+
+    y += 40;
+
+    {
+        float bx = x + 24;
+        float bw = w - 48;
+        float fill = partition_free_mb ? bw * partition_size_mb / partition_free_mb : 0;
+
+        gfx_rect(bx, y, bw, 18, gfx_rgba(0x1A, 0x27, 0x47, 0x80));
+        gfx_rect_vgradient(bx, y, fill, 18, UI_SEL_BOTTOM, UI_SEL_TOP);
+        gfx_border(bx, y, bw, 18, 1, UI_BORDER);
+
+        /*
+         * Marcador na ponta da barra.
+         */
+        gfx_rect(bx + fill - 2, y - 4, 4, 26, UI_TEXT);
+
+        gfx_text(bx, y + 24, "128 MB", UI_TEXT2);
+
+        snprintf(line, sizeof(line), "máx. %u MB", partition_free_mb);
+        gfx_text_right(bx + bw, y + 24, line, UI_TEXT2);
+    }
+
+    y += 60;
+
+    gfx_text_fit(x + 16, y, w - 32, "Formato PFS. Acima do máximo por partição o resto", UI_TEXT_OFF);
+    gfx_text_fit(x + 16, y + 18, w - 32, "vira subpartições (como o wLaunchELF).", UI_TEXT_OFF);
+
+    y = 84 + 280 - 58;
+
+    i = gfx_button_hint(x + 16, y, GFX_BTN_LEFT, "") - 18;
+    i += gfx_button_hint(x + 16 + i, y, GFX_BTN_RIGHT, "128 MB");
+    i += gfx_button_hint(x + 16 + i, y, GFX_BTN_L1, "") - 18;
+    gfx_button_hint(x + 16 + i, y, GFX_BTN_R1, "1 GB");
+
+    y += 26;
+
+    i = gfx_button_hint(x + 16, y, GFX_BTN_CROSS, "Criar");
+    gfx_button_hint(x + 16 + i, y, GFX_BTN_CIRCLE, "Cancelar");
+}
+
+
+/*
  * Player de MP3: quadro da capa (barras animadas ate a capa ser
  * desenhada), informacoes da tag, tempo e controles.
  */
@@ -6510,6 +6885,10 @@ static void draw_gui_browser(void)
      */
     if (current_screen == SCREEN_SETTINGS)
         settings_draw_gui();
+    else if (current_screen == SCREEN_DEVICES && format_step != FORMAT_NONE)
+        gui_format();
+    else if (files && partition_step != PARTITION_NONE)
+        gui_partition();
     else if (files && keyboard_action != KEYBOARD_NONE)
         osk_draw_gui();
     else if (files && confirm_action != CONFIRM_NONE)
@@ -6529,11 +6908,9 @@ static int gui_handles_screen(void)
         return 1;
 
     if (current_screen == SCREEN_DEVICES)
-        return format_step == FORMAT_NONE;
+        return 1;
 
-    return current_screen == SCREEN_FILES &&
-           partition_step == PARTITION_NONE &&
-           !hdl_info_open;
+    return current_screen == SCREEN_FILES && !hdl_info_open;
 }
 
 
