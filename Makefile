@@ -1,6 +1,6 @@
 EE_BIN = PS2FileManager.elf
 
-EE_OBJS = src/main.o src/memorycard.o src/filemanager.o src/clipboard.o src/fm_fileio.o src/network.o src/smb.o src/dev9.o src/hdd.o src/usb.o src/iso9660.o src/hdl.o src/osk.o src/config.o src/settings.o src/usbfmt.o src/bdmcore.o src/id3.o src/mp3dec.o src/mp3player.o src/elfrun.o
+EE_OBJS = src/main.o src/memorycard.o src/filemanager.o src/clipboard.o src/fm_fileio.o src/network.o src/smb.o src/dev9.o src/hdd.o src/usb.o src/iso9660.o src/hdl.o src/osk.o src/config.o src/settings.o src/usbfmt.o src/bdmcore.o src/id3.o src/mp3dec.o src/mp3player.o src/elfrun.o src/console.o src/gfx.o src/pngload.o
 
 # Modulos IOP do PS2SDK embutidos no ELF (mesmo modelo do wLaunchELF)
 IRX_OBJS = irx/iomanX_irx.o irx/fileXio_irx.o irx/mcman_irx.o irx/mcserv_irx.o
@@ -24,9 +24,17 @@ IRX_OBJS += irx/FATFMT_irx.o
 IRX_OBJS += irx/AUDSRV_irx.o
 EE_OBJS += $(IRX_OBJS)
 
-EE_INCS = -I$(PS2SDK)/ee/include -I$(PS2SDK)/common/include -Iinclude -Ithird_party/minimp3
+# Interface grafica: PNGs de assets/ (tools/make_assets.sh) embutidos
+ASSET_OBJS = irx/bg_png.o irx/font_mono_png.o
+EE_OBJS += $(ASSET_OBJS)
 
-EE_LIBS = -lelf-loader-nocolour -laudsrv -lpad -lmc -lfileXio -lnetman -lps2ips -lpatches -ldebug -lkernel
+EE_INCS = -I$(PS2SDK)/ee/include -I$(PS2SDK)/common/include -I$(PS2SDK)/ports/include \
+          -I$(GSKIT)/include -Iinclude -Ithird_party/minimp3
+
+EE_LDFLAGS += -L$(GSKIT)/lib -L$(PS2SDK)/ports/lib
+
+# Sem -ldebug: src/console.c substitui a debug screen (mesmas funcoes)
+EE_LIBS = -lgskit -ldmakit -lpng -lz -lelf-loader-nocolour -laudsrv -lpad -lmc -lfileXio -lnetman -lps2ips -lpatches -lkernel
 
 EE_CFLAGS = -O2 -G0 -Wall
 
@@ -38,6 +46,14 @@ src/mp3dec.o: EE_CFLAGS += -fsingle-precision-constant
 irx/%_irx.c: $(PS2SDK)/iop/irx/%.irx
 	@mkdir -p irx
 	bin2c $< $@ $*_irx
+
+irx/bg_png.c: assets/bg_640x448.png
+	@mkdir -p irx
+	bin2c $< $@ bg_png
+
+irx/font_mono_png.c: assets/font_mono_8x16.png
+	@mkdir -p irx
+	bin2c $< $@ font_mono_png
 
 # Nome do arquivo diferente do simbolo (ps2ip-nm tem hifen)
 irx/DEV9_irx.c: $(PS2SDK)/iop/irx/ps2dev9.irx

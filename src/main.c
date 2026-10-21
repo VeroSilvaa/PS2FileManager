@@ -40,6 +40,7 @@
 #include "usbfmt.h"
 #include "mp3player.h"
 #include "elfrun.h"
+#include "gfx.h"
 
 
 
@@ -5595,10 +5596,14 @@ int main(int argc, char *argv[])
          */
         previous_pad = new_pad;
 
-        if (!read_pad()) {
-            nopdelay();
+        /*
+         * Um quadro por volta (espera o VSync: 60 Hz). As telas
+         * escrevem na camada de texto; o gfx desenha.
+         */
+        gfx_frame();
+
+        if (!read_pad())
             continue;
-        }
 
         /*
          * Nenhum botão mudou.
@@ -5614,7 +5619,6 @@ int main(int argc, char *argv[])
              */
             draw_periodic();
 
-            nopdelay();
             continue;
         }
 
