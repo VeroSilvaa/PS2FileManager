@@ -1568,6 +1568,35 @@ static unsigned long long progress_done;
 static int progress_files_total;
 static int progress_file_index;
 
+/*
+ * Janela de progresso grafica (T5): preenchida pelo Colar e pela
+ * instalacao HDLoader, desenhada por draw_gui_progress.
+ */
+typedef struct {
+    char title[64];
+    char from[128];
+    char to[128];
+    char current[128];
+    char phase[24];
+
+    unsigned long long file_done;
+    unsigned long long file_total;
+    unsigned long long all_done;
+    unsigned long long all_total;
+
+    int file_index;
+    int file_count;     /* 0 = nao mostra "Arquivo N de M" */
+
+    unsigned long long speed;
+    unsigned long elapsed;
+    unsigned long remaining;
+} GuiProgress;
+
+static GuiProgress gprog;
+
+static void draw_gui_progress(void);
+static int gui_current_device(void);
+
 
 static void format_size(
     char *out,
@@ -1775,6 +1804,29 @@ static void paste_progress(
         text_remaining,
         text_speed
     );
+
+
+    /*
+     * Janela grafica (le gprog a cada quadro).
+     */
+    snprintf(gprog.title, sizeof(gprog.title), "%s",
+             clipboard.mode == CLIPBOARD_MOVE ? "Movendo arquivos…" : "Copiando arquivos…");
+    snprintf(gprog.current, sizeof(gprog.current), "%s", path_filename(path));
+    snprintf(gprog.phase, sizeof(gprog.phase), "%s",
+             phase == FILEIO_PHASE_COPY ? "copiando" : "conferindo");
+
+    gprog.file_done = file_done;
+    gprog.file_total = file_total;
+    gprog.all_done = progress_done;
+    gprog.all_total = progress_total;
+    gprog.file_index = progress_file_index;
+    gprog.file_count = progress_files_total;
+    gprog.speed = speed;
+    gprog.elapsed = elapsed_ms / 1000;
+    gprog.remaining = remaining;
+
+    gfx_set_screen(draw_gui_progress);
+    gfx_frame_throttled();
 }
 
 
@@ -1806,6 +1858,25 @@ static void run_paste(void)
 
     scr_setXY(0, 4);
     scr_printf("Calculando tamanho...\n");
+
+
+    /*
+     * Janela grafica: origem (pasta do 1o item) e destino.
+     */
+    memset(&gprog, 0, sizeof(gprog));
+
+    snprintf(gprog.title, sizeof(gprog.title), "%s",
+             clipboard.mode == CLIPBOARD_MOVE ? "Movendo arquivos…" : "Copiando arquivos…");
+    snprintf(gprog.from, sizeof(gprog.from), "%s", clipboard.paths[0]);
+
+    if (strrchr(gprog.from, '/') && strrchr(gprog.from, '/') > strchr(gprog.from, ':') + 1)
+        *strrchr(gprog.from, '/') = '\0';
+
+    snprintf(gprog.to, sizeof(gprog.to), "%s", file_manager.current_path);
+    snprintf(gprog.phase, sizeof(gprog.phase), "calculando tamanho");
+
+    gfx_set_screen(draw_gui_progress);
+    gfx_frame();
 
 
     total_bytes = 0;
@@ -2290,6 +2361,27 @@ static void hdl_progress_draw(
         text_elapsed,
         text_remaining
     );
+
+
+    /*
+     * Janela grafica (origem/destino ja preenchidos em
+     * hdl_install_all).
+     */
+    snprintf(gprog.title, sizeof(gprog.title), "%s", hdl_progress_title);
+    snprintf(gprog.phase, sizeof(gprog.phase), "%s",
+             phase == HDL_PHASE_WRITE ? "gravando no HDD" : "conferindo");
+
+    gprog.file_done = done;
+    gprog.file_total = total;
+    gprog.all_done = all_done;
+    gprog.all_total = all_total;
+    gprog.file_count = 0;
+    gprog.speed = speed;
+    gprog.elapsed = elapsed_ms / 1000;
+    gprog.remaining = remaining;
+
+    gfx_set_screen(draw_gui_progress);
+    gfx_frame_throttled();
 }
 
 
@@ -2320,6 +2412,11 @@ static void hdl_install_all(void)
             hdl_games[i].game_id,
             hdl_names[i]
         );
+
+        memset(&gprog, 0, sizeof(gprog));
+        snprintf(gprog.from, sizeof(gprog.from), "%s", hdl_paths[i]);
+        snprintf(gprog.to, sizeof(gprog.to), "HDD interno (HDLoader)");
+        snprintf(gprog.current, sizeof(gprog.current), "%s", hdl_names[i]);
 
         if (hdl_install(
                 hdl_paths[i],
@@ -4488,6 +4585,24 @@ static void update_device_screen(void)
     }
 
 
+    /*
+     * DIREITA: volta para a pasta aberta (sem perder o lugar).
+     */
+    if (pressed(PAD_RIGHT) && file_manager.current_path[0]) {
+
+        current_screen = SCREEN_FILES;
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "Diretorio: %s",
+            file_manager.current_path
+        );
+
+        return;
+    }
+
+
     if (pressed(PAD_UP)) {
 
         if (device_cursor > 0)
@@ -4782,6 +4897,25 @@ static void update_file_screen(void)
     if (operation_menu_open) {
 
         update_operation_menu();
+
+        return;
+    }
+
+
+    /*
+     * ESQUERDA: vai para a lista de dispositivos, no dispositivo
+     * atual (DIREITA volta para esta pasta).
+     */
+    if (pressed(PAD_LEFT)) {
+
+        int device = gui_current_device();
+
+        if (device >= 0)
+            device_cursor = device;
+
+        current_screen = SCREEN_DEVICES;
+
+        set_status("Dispositivos (DIREITA volta para a pasta).");
 
         return;
     }
@@ -5993,6 +6127,88 @@ static void gui_confirm(void)
 
         gfx_button_hint(bx, by, GFX_BTN_CIRCLE, "Cancelar");
     }
+}
+
+
+/*
+ * Barra de progresso (trilho + preenchimento) com a porcentagem a
+ * direita.
+ */
+static void gui_bar(float x, float y, float w, unsigned long long done, unsigned long long total)
+{
+    char percent_text[8];
+    int percent = total ? (int)(done * 100ULL / total) : 0;
+
+    if (percent > 100)
+        percent = 100;
+
+    gfx_rect(x, y, w, 14, gfx_rgba(0x1A, 0x27, 0x47, 0x80));
+
+    if (percent > 0)
+        gfx_rect_vgradient(x, y, w * percent / 100, 14, UI_SEL_BOTTOM, UI_SEL_TOP);
+
+    gfx_border(x, y, w, 14, 1, UI_BORDER);
+
+    snprintf(percent_text, sizeof(percent_text), "%d%%", percent);
+    gfx_text_right(x + w + 48, y - 3, percent_text, UI_TEXT);
+}
+
+
+/*
+ * Progresso (T5): copiar/mover e instalacao HDLoader.
+ */
+static void draw_gui_progress(void)
+{
+    float x = 90;
+    float w = 460;
+    float y;
+    char line[96];
+    char a[24];
+    char b[24];
+    char c[16];
+    char d[16];
+
+    gui_header();
+
+    y = gui_window(x, 76, w, 300, gprog.title);
+
+    gfx_text(x + 16, y, "De:", UI_TEXT2);
+    gfx_text_fit(x + 64, y, w - 80, gprog.from, UI_TEXT);
+    gfx_text(x + 16, y + 20, "Para:", UI_TEXT2);
+    gfx_text_fit(x + 64, y + 20, w - 80, gprog.to, UI_OK);
+
+    y += 52;
+
+    if (gprog.file_count > 0) {
+        snprintf(line, sizeof(line), "Arquivo %d de %d", gprog.file_index, gprog.file_count);
+        gfx_text(x + 16, y, line, UI_TEXT2);
+    }
+
+    gfx_text_right(x + w - 16, y, gprog.phase, UI_WARNING);
+    gfx_text_fit(x + 16, y + 20, w - 32, gprog.current, UI_TEXT);
+
+    y += 48;
+
+    gui_bar(x + 16, y, w - 96, gprog.file_done, gprog.file_total);
+
+    format_size(a, sizeof(a), gprog.file_done);
+    format_size(b, sizeof(b), gprog.file_total);
+    snprintf(line, sizeof(line), "%s de %s", a, b);
+    gfx_text(x + 16, y + 16, line, UI_TEXT2);
+
+    y += 62;
+
+    gfx_text(x + 16, y - 22, "Total", UI_TEXT2);
+    gui_bar(x + 16, y, w - 96, gprog.all_done, gprog.all_total);
+
+    format_size(a, sizeof(a), gprog.speed);
+    format_time(c, sizeof(c), gprog.elapsed);
+    format_time(d, sizeof(d), gprog.remaining);
+
+    snprintf(line, sizeof(line), "%s/s   |   Decorrido %s   |   Restante ~%s", a, c, d);
+    gfx_text(x + 16, y + 22, line, UI_TEXT2);
+
+    gfx_text(x + 16, 76 + 300 - 30, "Aguarde. Não desligue o console nem remova a mídia.", UI_TEXT_OFF);
 }
 
 
