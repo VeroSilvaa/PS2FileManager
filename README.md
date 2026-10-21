@@ -10,18 +10,19 @@ O `PS2FileManager.elf` pronto está em [Releases](https://github.com/VeroSilvaa/
 
 ## Dispositivos
 
-| Dispositivo | Caminho | Navegar | Copiar | Mover | Excluir |
-|---|---|---|---|---|---|
-| Memory Card 1 e 2 | `mc0:` / `mc1:` | ✅ | ✅ | ✅ | ✅ |
-| Rede SMB | `smb0:` | ✅ | ✅ | ✅ | ✅ |
-| HDD interno (APA/PFS) | `hdd0:` → `pfs0:`/`pfs1:` | ✅ | ✅ | ✅ | ✅ |
-| Pendrive USB (FAT32/exFAT) | `mass0:` / `mass1:` | ✅ | ✅ | ✅ | ✅ |
+| Dispositivo | Caminho | Navegar | Copiar | Mover | Excluir | Formatar |
+|---|---|---|---|---|---|---|
+| Memory Card 1 e 2 | `mc0:` / `mc1:` | ✅ | ✅ | ✅ | ✅ | nunca |
+| Rede SMB | `smb0:` | ✅ | ✅ | ✅ | ✅ | — |
+| HDD interno (APA/PFS) | `hdd0:` → `pfs0:`/`pfs1:` | ✅ | ✅ | ✅ | ✅ | APA |
+| HDD interno (MBR/GPT + exFAT/FAT32) | `ata0:` | ✅ | ✅ | ✅ | ✅ | exFAT, FAT32 |
+| Pendrive USB (FAT32/exFAT) | `usb0:` / `usb1:` | ✅ | ✅ | ✅ | ✅ | exFAT, FAT32 |
 
 Mover = cópia verificada → conferência dos totais (arquivos e bytes) → exclusão da origem. Se algo não bater, a origem é mantida.
 
 ## Recursos
 
-- Cópia **verificada byte a byte** (lê o destino de volta e compara)
+- Cópia **verificada byte a byte** (lê o destino de volta e compara); no Colar, **Quadrado** desliga a conferência para copiar mais rápido (o mover sempre confere)
 - Cópia recursiva de pastas e seleção múltipla
 - Copiar, recortar (mover), colar e excluir entre quaisquer dispositivos
 - **Criar pasta** e **renomear** com teclado virtual (no Memory Card, nomes de até 31 caracteres)
@@ -30,6 +31,36 @@ Mover = cópia verificada → conferência dos totais (arquivos e bytes) → exc
 - Confirmação em tela cheia antes de excluir/mover
 - Proteção dos arquivos de sistema dos saves (`icon.sys`, `*.icn`, `B?DATA-SYSTEM`)
 - **Instalação de jogos no HDD no formato HDLoader** (compatível com o OPL), veja abaixo
+- **Formatação** de pendrive e HDD, e criar/excluir partições do HDD, veja abaixo
+
+## Formatar (pendrive e HDD)
+
+Na lista de dispositivos, **R1** sobre o pendrive ou o HDD. Toda formatação pede **Triângulo** e depois **Start**. Memory Cards nunca são formatados.
+
+**Pendrive:** escolha o disco na lista (com tamanho, tabela e formato atuais).
+
+- Sem tabela de partições: o programa pergunta se deseja criar e oferece **MBR** ou **GPT**.
+- Com tabela: **FAT32**, **exFAT** ou recriar a tabela.
+
+**HDD interno:**
+
+- **APA** (padrão do PS2): cria `__mbr`, `__net`, `__system`, `__sysconf` e `__common`, como o wLaunchELF.
+- **MBR/GPT + exFAT ou FAT32**: o formato do modo **"BDM HDD"** do OPL. O HDD passa a abrir como `ata0:`.
+- De MBR/GPT dá para voltar ao APA pelo mesmo menu.
+
+**Partições do HDD (APA):** na lista de partições, **R1** cria (nome pelo teclado virtual, tamanho em uma janela com barra: Esquerda/Direita ±128 MB, L1/R1 ±1 GB) ou exclui uma partição. Partições do sistema (`__*`) não podem ser excluídas.
+
+**Segurança:** antes de carregar o driver APA, o programa lê os setores 0 e 1 do HDD, como o OPL. Se o disco for MBR/GPT ou tiver dados desconhecidos, o driver APA **não é carregado** (ele grava no disco ao iniciar), e nada é alterado.
+
+A formatação FAT32/exFAT usa um módulo IOP próprio (`iop/fatfmt`) com o [FatFs](http://elm-chan.org/fsw/ff/) de ChaN, porque o driver de FAT do PS2SDK não formata.
+
+### HDD em exFAT no OPL
+
+1. Formate o HDD em **MBR** ou **GPT** + **exFAT** pelo PS2FileManager.
+2. Copie as ISOs para as pastas `CD/` ou `DVD/` na raiz do HDD (`ata0:/CD/...`). Qualquer nome serve (o OPL lê o ID no `SYSTEM.CNF`).
+3. No OPL, em *Dispositivos BDM*, ligue o **HDD (ATA)** e **desligue o modo HDD (APA)**: os dois modos não funcionam juntos.
+
+Cada ISO pode ter no máximo 64 fragmentos (limite do OPL). Num disco recém-formatado a cópia grava em sequência.
 
 ## Instalar jogos no HDD (HDLoader)
 
@@ -103,7 +134,9 @@ pcsx2-qt -elf PS2FileManager.elf
   docker compose run --rm ps2filemanager sh usb/mkimg.sh   # gera usb/usb1.img e usb/usb2.img
   ```
 
-  O BDM numera as unidades na ordem de detecção, então `mass0:` não é necessariamente a porta 1.
+  O BDM numera as unidades na ordem de detecção, então `usb0:` não é necessariamente a porta 1. Para conferir as imagens depois de formatar: `docker compose run --rm ps2filemanager sh usb/checkimg.sh`.
+
+  Problema conhecido no PCSX2: com dois pendrives, se o primeiro a conectar estiver em **GPT**, o segundo falha ao conectar e o driver USB trava. Com um pendrive só, ou com o GPT conectando em segundo, funciona.
 - **SMB:** veja a seção abaixo.
 
 ## Configurar o SMB (rede)
@@ -141,7 +174,6 @@ Requisitos do servidor:
 ## Planejado
 
 - HDLoader: DVD de duas camadas
-- Formatação de pendrive/HDD
 - Interface gráfica 640×448 com gsKit
 - Player de MP3, servidor FTP
 
@@ -164,7 +196,11 @@ Chave aleatória: `2c7f2bbb-2b6b-4b41-8b5c-b47a222531d6` (Veridiano Silva)
 - [PS2SDK / ps2dev](https://github.com/ps2dev) — toolchain e módulos IOP
 - [wLaunchELF](https://github.com/ps2homebrew/wLaunchELF) e [Open PS2 Loader](https://github.com/ps2homebrew/Open-PS2-Loader) — referência de inicialização do IOP, HDD, USB e do formato HDLoader
 - [HDLGameInstaller](https://github.com/ps2homebrew/HDLGameInstaller) e [hdl-dump](https://github.com/ps2homebrew/hdl-dump) — referência do formato HDLoader (nenhum código copiado)
+- [FatFs](http://elm-chan.org/fsw/ff/) (ChaN) — formatação FAT32/exFAT
 
 ## Licença
 
-[MIT](LICENSE), exceto `iop/ps2hdd-hdl/`, que é código do PS2SDK sob a Academic Free License 2.0 ([LICENSE-PS2SDK](iop/ps2hdd-hdl/LICENSE-PS2SDK)).
+[MIT](LICENSE), exceto:
+
+- `iop/ps2hdd-hdl/`: código do PS2SDK sob a Academic Free License 2.0 ([LICENSE-PS2SDK](iop/ps2hdd-hdl/LICENSE-PS2SDK));
+- `iop/fatfmt/fatfs/`: FatFs de ChaN (fork usado pelo PS2SDK), sob a licença FatFs ([LICENSE-FatFs.txt](iop/fatfmt/fatfs/LICENSE-FatFs.txt)).
