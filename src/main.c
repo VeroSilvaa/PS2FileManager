@@ -103,7 +103,8 @@ extern unsigned int size_mcserv_irx;
 typedef enum {
     SCREEN_DEVICES = 0,
     SCREEN_FILES,
-    SCREEN_SETTINGS
+    SCREEN_SETTINGS,
+    SCREEN_PLAYER
 } AppScreen;
 
 
@@ -2863,6 +2864,8 @@ static void delete_partition(void)
 {
     int result;
 
+    mp3player_stop();
+
 
     /*
      * O clipboard pode apontar para a particao (montada em pfsN:).
@@ -4011,6 +4014,11 @@ static void run_format_usb(void)
         format_chosen == FORMAT_ACT_TABLE_MBR ||
         format_chosen == FORMAT_ACT_TABLE_GPT;
 
+    /*
+     * A musica pode estar tocando deste disco.
+     */
+    mp3player_stop();
+
 
     scr_clear();
 
@@ -4127,6 +4135,8 @@ static void run_format_usb(void)
 static void run_format_hdd_apa(void)
 {
     int result;
+
+    mp3player_stop();
 
     if (format_hdd_fat) {
 
@@ -4505,7 +4515,10 @@ static void update_settings_screen(void)
     /*
      * SMB reconecta com os dados novos na proxima abertura;
      * com a rede ja carregada, o modo de IP vale na hora.
+     * A musica pode estar vindo do SMB: para antes.
      */
+    mp3player_stop();
+
     smb_disconnect();
 
     if (network_ready && network_apply_config() < 0)
@@ -4535,20 +4548,26 @@ static void update_settings_screen(void)
  * ============================================================ */
 
 /*
- * Botoes recem-pressionados para o player (ele tem o proprio laco).
+ * Tela de onde o player foi aberto (O volta para ela).
  */
-static unsigned int mp3_pad(void)
-{
-    if (!read_pad())
-        return 0;
+static AppScreen player_return_screen = SCREEN_FILES;
 
-    return new_pad & ~old_pad;
+
+static void show_mp3_player(void)
+{
+    player_return_screen = current_screen;
+
+    current_screen = SCREEN_PLAYER;
+
+    scr_clear();
+
+    mp3player_draw(1);
 }
 
 
 static void open_mp3_player(const char *name)
 {
-    if (mp3player_run(file_manager.current_path, name, mp3_pad) < 0) {
+    if (mp3player_start(file_manager.current_path, name) < 0) {
 
         snprintf(
             status_message,
@@ -4560,7 +4579,123 @@ static void open_mp3_player(const char *name)
         return;
     }
 
-    set_status("MP3: player fechado.");
+    show_mp3_player();
+}
+
+
+static void update_player_screen(void)
+{
+    if (pressed(PAD_CIRCLE)) {
+
+        current_screen = player_return_screen;
+
+        if (!mp3player_active() && mp3player_error()[0]) {
+
+            snprintf(
+                status_message,
+                sizeof(status_message),
+                "MP3: %s",
+                mp3player_error()
+            );
+        }
+
+        return;
+    }
+
+    if (pressed(PAD_START)) {
+
+        mp3player_stop();
+
+        current_screen = player_return_screen;
+
+        set_status("MP3: parado.");
+
+        return;
+    }
+
+    if (pressed(PAD_CROSS))
+        mp3player_command(MP3_CMD_PAUSE);
+
+    if (pressed(PAD_R1))
+        mp3player_command(MP3_CMD_NEXT);
+
+    if (pressed(PAD_L1))
+        mp3player_command(MP3_CMD_PREV);
+
+    if (pressed(PAD_UP))
+        mp3player_command(MP3_CMD_VOLUME_UP);
+
+    if (pressed(PAD_DOWN))
+        mp3player_command(MP3_CMD_VOLUME_DOWN);
+
+    if (pressed(PAD_SQUARE))
+        mp3player_command(MP3_CMD_SHUFFLE);
+
+    if (pressed(PAD_TRIANGLE))
+        mp3player_command(MP3_CMD_REPEAT);
+}
+
+
+/*
+ * Segunda linha do cabecalho: a musica tocando, ou a regua.
+ */
+static void draw_header_rule(const char *rule)
+{
+    char line[80];
+
+    mp3player_now_playing(line, sizeof(line));
+
+    scr_printf("%-70.70s\n", line[0] ? line : rule);
+}
+
+
+/*
+ * Telas "simples" (lista sem menu/confirmacao por cima): so nelas
+ * a linha da musica e atualizada sozinha.
+ */
+static int screen_is_plain(void)
+{
+    if (current_screen == SCREEN_DEVICES)
+        return format_step == FORMAT_NONE;
+
+    return current_screen == SCREEN_FILES &&
+           confirm_action == CONFIRM_NONE &&
+           keyboard_action == KEYBOARD_NONE &&
+           partition_step == PARTITION_NONE &&
+           !hdl_info_open &&
+           !operation_menu_open;
+}
+
+
+/*
+ * Sem botao apertado: o player e a linha "Tocando" continuam
+ * mudando. Player ~8x/s; linha do cabecalho 1x/s.
+ */
+static void draw_periodic(void)
+{
+    static clock_t last = 0;
+    clock_t now = clock();
+
+    if (current_screen == SCREEN_PLAYER) {
+
+        if (now - last < CLOCKS_PER_SEC / 8)
+            return;
+
+        last = now;
+
+        mp3player_draw(0);
+
+        return;
+    }
+
+    if (!mp3player_active() || !screen_is_plain() || now - last < CLOCKS_PER_SEC)
+        return;
+
+    last = now;
+
+    scr_setXY(0, 1);
+
+    draw_header_rule("===============");
 }
 
 
@@ -4833,8 +4968,10 @@ static void draw_device_screen(void)
         "PS2FileManager\n"
     );
 
+    draw_header_rule("===============");
+
     scr_printf(
-        "===============\n\n"
+        "\n"
     );
 
     scr_printf(
@@ -5088,9 +5225,7 @@ static void draw_file_screen(void)
         "PS2FileManager\n"
     );
 
-    scr_printf(
-        "===============\n"
-    );
+    draw_header_rule("===============");
 
 
     scr_printf(
@@ -5270,6 +5405,10 @@ static void draw_screen(void)
 
         settings_draw();
 
+    } else if (current_screen == SCREEN_PLAYER) {
+
+        mp3player_draw(0);
+
     } else {
 
         draw_file_screen();
@@ -5403,6 +5542,12 @@ int main(int argc, char *argv[])
          * draw_screen().
          */
         if (new_pad == previous_pad) {
+
+            /*
+             * Player/linha "Tocando" mudam sozinhos.
+             */
+            draw_periodic();
+
             nopdelay();
             continue;
         }
@@ -5416,10 +5561,17 @@ int main(int argc, char *argv[])
          * Portanto pressed() continua
          * funcionando normalmente.
          */
-        if (current_screen == SCREEN_DEVICES) {
+        /*
+         * SELECT: volta a tela do player (musica em segundo plano).
+         */
+        if (pressed(PAD_SELECT) && mp3player_active() && screen_is_plain()) {
+            show_mp3_player();
+        } else if (current_screen == SCREEN_DEVICES) {
             update_device_screen();
         } else if (current_screen == SCREEN_SETTINGS) {
             update_settings_screen();
+        } else if (current_screen == SCREEN_PLAYER) {
+            update_player_screen();
         } else {
             update_file_screen();
         }

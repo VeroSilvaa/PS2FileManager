@@ -9,9 +9,9 @@
 
 #include <tamtypes.h>
 #include <kernel.h>
+#include <delaythread.h>
 #include <loadfile.h>
 #include <debug.h>
-#include <libpad.h>
 #include <audsrv.h>
 
 #include "minimp3.h"
@@ -20,6 +20,11 @@
 
 extern unsigned char AUDSRV_irx[];
 extern unsigned int size_AUDSRV_irx;
+
+/*
+ * Registrador gp do programa (para a thread do player).
+ */
+extern void *_gp;
 
 #define MP3_MAX_TRACKS   512
 #define MP3_NAME_MAX     256
@@ -45,6 +50,13 @@ extern unsigned int size_AUDSRV_irx;
 
 #define VOLUME_STEP      5
 
+/*
+ * Thread do player: prioridade acima da interface (numero menor).
+ */
+#define PLAYER_STACK     (64 * 1024)
+#define PLAYER_PRIORITY  29
+#define MAIN_PRIORITY    30
+
 typedef enum {
     REPEAT_OFF = 0,
     REPEAT_ONE,
@@ -59,6 +71,23 @@ typedef enum {
     TRACK_ERROR
 } TrackResult;
 
+/*
+ * Estado da musica atual: escrito pela thread do player, lido pela
+ * interface (so para desenhar).
+ */
+typedef struct {
+    Id3Info id3;
+    char name[MP3_NAME_MAX];
+    int index;
+
+    int hz;
+    int channels;
+    int bitrate;
+
+    unsigned int duration;      /* segundos (0 = desconhecida) */
+    unsigned long long samples; /* tocadas */
+} TrackState;
+
 static char tracks[MP3_MAX_TRACKS][MP3_NAME_MAX];
 static int track_count;
 
@@ -72,6 +101,7 @@ static int format_channels = 0;
 
 static int shuffle = 0;
 static RepeatMode repeat = REPEAT_OFF;
+
 /*
  * Comeca no volume original da musica (o audsrv a 80 ja soa
  * bem mais baixo).
@@ -79,6 +109,31 @@ static RepeatMode repeat = REPEAT_OFF;
 static int volume = MAX_VOLUME;
 
 static int levels[BARS];
+
+static TrackState current;
+
+/*
+ * Comunicacao interface -> thread: cada sinalizador e escrito so
+ * pela interface (1) e limpo so pela thread (0).
+ */
+static volatile int request_start;
+static volatile int request_stop;
+static volatile int request_pause;
+static volatile int request_next;
+static volatile int request_prev;
+static volatile int request_volume;
+
+static volatile int playing;        /* thread com playlist ativa */
+static volatile int paused;
+static volatile int track_serial;   /* muda a cada musica */
+
+static char start_dir[MP3_PATH_MAX];
+static char start_first[MP3_NAME_MAX];
+
+static int thread_id = -1;
+static unsigned char thread_stack[PLAYER_STACK] __attribute__((aligned(16)));
+
+static int drawn_serial = -1;
 
 static char last_error[128];
 
@@ -112,6 +167,17 @@ static void join_path(char *out, int size, const char *dir, const char *name)
 static void format_mmss(char *out, int size, unsigned int seconds)
 {
     snprintf(out, size, "%02u:%02u", seconds / 60, seconds % 60);
+}
+
+
+static unsigned int elapsed_seconds(const TrackState *t)
+{
+    unsigned int seconds = t->hz ? (unsigned int)(t->samples / t->hz) : 0;
+
+    if (t->duration && seconds > t->duration)
+        seconds = t->duration;
+
+    return seconds;
 }
 
 
@@ -267,132 +333,6 @@ static unsigned int vbr_frames(const unsigned char *frame, int available)
 }
 
 
-/* ============================================================
- * Tela
- * ============================================================ */
-
-typedef struct {
-    Id3Info id3;
-    char name[MP3_NAME_MAX];
-    int index;
-
-    int hz;
-    int channels;
-    int bitrate;
-
-    unsigned int duration;      /* segundos (0 = desconhecida) */
-    unsigned long long samples; /* tocadas */
-
-    int paused;
-} TrackState;
-
-
-static void draw_static(const TrackState *t)
-{
-    scr_clear();
-
-    scr_printf("PS2FileManager - MP3 Player\n");
-    scr_printf("===========================\n");
-
-    scr_setXY(0, 4);
-
-    scr_printf("Titulo : %.60s\n", t->id3.title[0] ? t->id3.title : t->name);
-    scr_printf("Artista: %.60s\n", t->id3.artist[0] ? t->id3.artist : "-");
-    scr_printf("Album  : %.60s\n", t->id3.album[0] ? t->id3.album : "-");
-    scr_printf("Faixa  : %s\n", t->id3.track[0] ? t->id3.track : "-");
-
-    if (t->id3.has_cover)
-        scr_printf("Capa   : sim (%s, %u KB) - exibida na interface grafica\n",
-                   t->id3.cover_mime[0] ? t->id3.cover_mime : "imagem",
-                   t->id3.cover_size / 1024);
-    else
-        scr_printf("Capa   : nao\n");
-
-    scr_setXY(0, 21);
-
-    scr_printf("X play/pause | L1/R1 anterior/proxima | CIMA/BAIXO volume\n");
-    scr_printf("QUADRADO aleatorio | TRIANGULO repetir | O parar\n\n");
-    scr_printf("%.70s\n", t->name);
-}
-
-
-static void draw_dynamic(const TrackState *t)
-{
-    static const char *repeat_names[] = { "nao", "uma", "todas" };
-    char elapsed[8];
-    char total[8];
-    char bar[33];
-    unsigned int seconds;
-    int filled;
-    int r;
-    int i;
-
-
-    scr_setXY(0, ROW_STATUS);
-
-    scr_printf(
-        "Musica %d de %d | Aleatorio: %-3s | Repetir: %-5s   \n",
-        t->index + 1,
-        track_count,
-        shuffle ? "sim" : "nao",
-        repeat_names[repeat]
-    );
-
-
-    /*
-     * Barras (de cima para baixo).
-     */
-    for (r = BAR_ROWS; r >= 1; r--) {
-
-        scr_setXY(4, ROW_BARS + (BAR_ROWS - r));
-
-        for (i = 0; i < BARS; i++)
-            scr_printf(levels[i] >= r ? "## " : "   ");
-    }
-
-
-    seconds = t->hz ? (unsigned int)(t->samples / t->hz) : 0;
-
-    if (t->duration && seconds > t->duration)
-        seconds = t->duration;
-
-    filled = t->duration ? (int)(seconds * 32 / t->duration) : 0;
-
-    for (i = 0; i < 32; i++)
-        bar[i] = i < filled ? '#' : '-';
-
-    bar[32] = '\0';
-
-    format_mmss(elapsed, sizeof(elapsed), seconds);
-    format_mmss(total, sizeof(total), t->duration);
-
-    scr_setXY(0, ROW_TIME);
-
-    scr_printf("[%s] %s / %s   \n", bar, elapsed, t->duration ? total : "--:--");
-
-    scr_printf(
-        "%-8s %3d kbps  %5d Hz  %s       \n",
-        t->paused ? "PAUSADO" : "TOCANDO",
-        t->bitrate,
-        t->hz,
-        t->channels == 1 ? "mono" : "estereo"
-    );
-
-
-    /*
-     * Volume: 20 posicoes de 5%.
-     */
-    for (i = 0; i < 20; i++)
-        bar[i] = i < volume / 5 ? '#' : '-';
-
-    bar[20] = '\0';
-
-    scr_setXY(0, ROW_VOLUME);
-
-    scr_printf("Volume [%s] %3d%%  (CIMA/BAIXO)   \n", bar, volume);
-}
-
-
 /*
  * Nivel de cada barra a partir de uma fatia do frame decodificado.
  */
@@ -434,10 +374,10 @@ static void update_levels(const mp3d_sample_t *samples, int count, int channels)
 
 
 /* ============================================================
- * Tocar uma musica
+ * Thread do player: tocar uma musica
  * ============================================================ */
 
-static TrackResult play_track(const char *dir, int index, Mp3PadFn pad)
+static TrackResult play_track(const char *dir, int index)
 {
     char path[MP3_PATH_MAX];
     TrackState t;
@@ -445,7 +385,6 @@ static TrackResult play_track(const char *dir, int index, Mp3PadFn pad)
     unsigned int audio_end;
     unsigned int position;
     unsigned int size;
-    clock_t last_draw = 0;
     int first_frame = 1;
     int in_len = 0;
     int eof = 0;
@@ -487,71 +426,47 @@ static TrackResult play_track(const char *dir, int index, Mp3PadFn pad)
 
     mp3dec_init(&decoder);
 
-    draw_static(&t);
-    draw_dynamic(&t);
+    current = t;
+    track_serial++;
 
 
     while (1) {
 
-        unsigned int buttons = pad();
-        mp3d_sample_t *out;
         int samples;
 
 
-        if (buttons & PAD_CIRCLE) {
+        /*
+         * Pedidos da interface.
+         */
+        if (request_stop || request_start) {
             close(fd);
             return TRACK_STOP;
         }
 
-        if (buttons & PAD_R1) {
+        if (request_next) {
+            request_next = 0;
             close(fd);
             return TRACK_NEXT;
         }
 
-        if (buttons & PAD_L1) {
+        if (request_prev) {
+            request_prev = 0;
             close(fd);
             return TRACK_PREV;
         }
 
-        if (buttons & PAD_CROSS)
-            t.paused = !t.paused;
+        if (request_pause) {
+            request_pause = 0;
+            paused = !paused;
+        }
 
-        if (buttons & PAD_SQUARE)
-            shuffle = !shuffle;
-
-        if (buttons & PAD_TRIANGLE)
-            repeat = (RepeatMode)((repeat + 1) % 3);
-
-        if (buttons & (PAD_UP | PAD_DOWN)) {
-
-            volume += (buttons & PAD_UP) ? VOLUME_STEP : -VOLUME_STEP;
-
-            if (volume > MAX_VOLUME)
-                volume = MAX_VOLUME;
-
-            if (volume < 0)
-                volume = 0;
-
+        if (request_volume) {
+            request_volume = 0;
             audsrv_set_volume(volume);
         }
 
-
-        /*
-         * Tela: ~8 vezes por segundo (e logo apos um botao).
-         */
-        if (buttons || clock() - last_draw > CLOCKS_PER_SEC / 8) {
-            draw_dynamic(&t);
-            last_draw = clock();
-        }
-
-
-        if (t.paused) {
-
-            clock_t wait = clock();
-
-            while (clock() - wait < CLOCKS_PER_SEC / 50)
-                ;
-
+        if (paused) {
+            DelayThread(20000);
             continue;
         }
 
@@ -608,22 +523,22 @@ static TrackResult play_track(const char *dir, int index, Mp3PadFn pad)
 
             first_frame = 0;
 
-            t.hz = info.hz;
-            t.channels = info.channels;
+            current.hz = info.hz;
+            current.channels = info.channels;
 
             frames = vbr_frames(in_buf + info.frame_offset, in_len - info.frame_offset);
 
             if (frames)
-                t.duration = (unsigned int)((unsigned long long)frames * samples / info.hz);
+                current.duration = (unsigned int)((unsigned long long)frames * samples / info.hz);
             else if (info.bitrate_kbps)
-                t.duration = (audio_end - t.id3.tag_size) / (info.bitrate_kbps * 125);
+                current.duration = (audio_end - current.id3.tag_size) / (info.bitrate_kbps * 125);
 
             printf(
                 "FM MP3: %d Hz, %d canal(is), %d kbps, %u s (%s)\n",
                 info.hz,
                 info.channels,
                 info.bitrate_kbps,
-                t.duration,
+                current.duration,
                 frames ? "VBR" : "CBR"
             );
 
@@ -639,14 +554,15 @@ static TrackResult play_track(const char *dir, int index, Mp3PadFn pad)
 
             int bytes = samples * info.channels * (int)sizeof(mp3d_sample_t);
 
-            out = pcm;
+            current.bitrate = info.bitrate_kbps;
 
-            t.bitrate = info.bitrate_kbps;
-
+            /*
+             * Dorme aqui ate o IOP ter espaco: a interface roda.
+             */
             audsrv_wait_audio(bytes);
-            audsrv_play_audio((const char *)out, bytes);
+            audsrv_play_audio((const char *)pcm, bytes);
 
-            t.samples += samples;
+            current.samples += samples;
 
             update_levels(pcm, samples, info.channels);
         }
@@ -655,10 +571,10 @@ static TrackResult play_track(const char *dir, int index, Mp3PadFn pad)
 
 
 /* ============================================================
- * Playlist
+ * Thread do player: playlist
  * ============================================================ */
 
-int mp3player_run(const char *dir, const char *first, Mp3PadFn pad)
+static void run_playlist(const char *dir, const char *first)
 {
     TrackResult result;
     int failures = 0;
@@ -666,15 +582,10 @@ int mp3player_run(const char *dir, const char *first, Mp3PadFn pad)
     int i;
 
 
-    last_error[0] = '\0';
-
-    if (audio_load() < 0)
-        return -1;
-
     if (build_playlist(dir) <= 0) {
         if (!last_error[0])
             snprintf(last_error, sizeof(last_error), "nenhum .mp3 na pasta");
-        return -1;
+        return;
     }
 
     for (i = 0; i < track_count; i++) {
@@ -687,7 +598,7 @@ int mp3player_run(const char *dir, const char *first, Mp3PadFn pad)
 
     while (1) {
 
-        result = play_track(dir, index, pad);
+        result = play_track(dir, index);
 
         if (result == TRACK_STOP)
             break;
@@ -709,12 +620,11 @@ int mp3player_run(const char *dir, const char *first, Mp3PadFn pad)
                     "nenhuma musica abriu (nomes com acento/travessao no SMB?)"
                 );
 
-                audio_stop();
-
-                return -1;
+                break;
             }
 
             result = TRACK_NEXT;
+
         } else {
             failures = 0;
         }
@@ -747,8 +657,338 @@ int mp3player_run(const char *dir, const char *first, Mp3PadFn pad)
             break;  /* fim da playlist */
         }
     }
+}
 
-    audio_stop();
+
+static void player_thread(void *arg)
+{
+    char dir[MP3_PATH_MAX];
+    char first[MP3_NAME_MAX];
+
+    (void)arg;
+
+    while (1) {
+
+        if (!request_start) {
+            DelayThread(20000);
+            continue;
+        }
+
+        snprintf(dir, sizeof(dir), "%s", start_dir);
+        snprintf(first, sizeof(first), "%s", start_first);
+
+        request_start = 0;
+        request_stop = 0;
+        request_next = 0;
+        request_prev = 0;
+        request_pause = 0;
+        paused = 0;
+        last_error[0] = '\0';
+
+        playing = 1;
+
+        run_playlist(dir, first);
+
+        audio_stop();
+
+        /*
+         * Um novo start durante a musica nao passa por "parado".
+         */
+        if (!request_start)
+            playing = 0;
+    }
+}
+
+
+/* ============================================================
+ * Interface (thread principal)
+ * ============================================================ */
+
+static int thread_start(void)
+{
+    ee_thread_t thread;
+
+    if (thread_id >= 0)
+        return 0;
+
+    /*
+     * Interface abaixo do player: o player so roda quando acorda
+     * (audsrv/arquivo), e a interface usa o resto do tempo.
+     */
+    ChangeThreadPriority(GetThreadId(), MAIN_PRIORITY);
+
+    memset(&thread, 0, sizeof(thread));
+
+    thread.func = (void *)player_thread;
+    thread.stack = thread_stack;
+    thread.stack_size = sizeof(thread_stack);
+    thread.gp_reg = &_gp;
+    thread.initial_priority = PLAYER_PRIORITY;
+
+    thread_id = CreateThread(&thread);
+
+    if (thread_id < 0) {
+        snprintf(last_error, sizeof(last_error), "CreateThread falhou (%d)", thread_id);
+        return -1;
+    }
+
+    StartThread(thread_id, NULL);
+
+    printf("FM MP3: thread do player %d\n", thread_id);
 
     return 0;
+}
+
+
+int mp3player_start(const char *dir, const char *first)
+{
+    last_error[0] = '\0';
+
+    if (audio_load() < 0 || thread_start() < 0)
+        return -1;
+
+    snprintf(start_dir, sizeof(start_dir), "%s", dir);
+    snprintf(start_first, sizeof(start_first), "%s", first);
+
+    playing = 1;
+    request_start = 1;
+
+    return 0;
+}
+
+
+void mp3player_command(Mp3Command command)
+{
+    switch (command) {
+
+        case MP3_CMD_PAUSE:
+            request_pause = 1;
+            break;
+
+        case MP3_CMD_NEXT:
+            request_next = 1;
+            break;
+
+        case MP3_CMD_PREV:
+            request_prev = 1;
+            break;
+
+        case MP3_CMD_STOP:
+            request_stop = 1;
+            break;
+
+        case MP3_CMD_VOLUME_UP:
+        case MP3_CMD_VOLUME_DOWN:
+
+            volume += command == MP3_CMD_VOLUME_UP ? VOLUME_STEP : -VOLUME_STEP;
+
+            if (volume > MAX_VOLUME)
+                volume = MAX_VOLUME;
+
+            if (volume < 0)
+                volume = 0;
+
+            request_volume = 1;
+            break;
+
+        case MP3_CMD_SHUFFLE:
+            shuffle = !shuffle;
+            break;
+
+        case MP3_CMD_REPEAT:
+            repeat = (RepeatMode)((repeat + 1) % 3);
+            break;
+    }
+}
+
+
+void mp3player_stop(void)
+{
+    int waited = 0;
+
+    if (!playing)
+        return;
+
+    request_stop = 1;
+
+    /*
+     * Ate ~2 s para a thread fechar o arquivo e parar o audio.
+     */
+    while (playing && waited < 100) {
+        DelayThread(20000);
+        waited++;
+    }
+
+    printf("FM MP3: parado (%s)\n", playing ? "tempo esgotado" : "ok");
+}
+
+
+int mp3player_active(void)
+{
+    return playing;
+}
+
+
+/* ============================================================
+ * Desenho (thread principal)
+ * ============================================================ */
+
+static void draw_static(const TrackState *t)
+{
+    scr_clear();
+
+    scr_printf("PS2FileManager - MP3 Player\n");
+    scr_printf("===========================\n");
+
+    scr_setXY(0, 4);
+
+    scr_printf("Titulo : %.60s\n", t->id3.title[0] ? t->id3.title : t->name);
+    scr_printf("Artista: %.60s\n", t->id3.artist[0] ? t->id3.artist : "-");
+    scr_printf("Album  : %.60s\n", t->id3.album[0] ? t->id3.album : "-");
+    scr_printf("Faixa  : %s\n", t->id3.track[0] ? t->id3.track : "-");
+
+    if (t->id3.has_cover)
+        scr_printf("Capa   : sim (%s, %u KB) - exibida na interface grafica\n",
+                   t->id3.cover_mime[0] ? t->id3.cover_mime : "imagem",
+                   t->id3.cover_size / 1024);
+    else
+        scr_printf("Capa   : nao\n");
+
+    scr_setXY(0, 21);
+
+    scr_printf("X play/pause | L1/R1 anterior/proxima | CIMA/BAIXO volume\n");
+    scr_printf("QUADRADO aleatorio | TRIANGULO repetir | START parar\n");
+    scr_printf("O voltar a lista (a musica continua; SELECT reabre)\n");
+    scr_printf("%.70s\n", t->name);
+}
+
+
+void mp3player_draw(int full)
+{
+    static const char *repeat_names[] = { "nao", "uma", "todas" };
+    const TrackState *t = &current;
+    char elapsed[8];
+    char total[8];
+    char bar[33];
+    unsigned int seconds;
+    int filled;
+    int r;
+    int i;
+
+
+    if (!playing) {
+
+        scr_clear();
+
+        scr_printf("PS2FileManager - MP3 Player\n");
+        scr_printf("===========================\n\n");
+        scr_printf("Parado.\n\n");
+
+        if (last_error[0])
+            scr_printf("%s\n\n", last_error);
+
+        scr_printf("O voltar\n");
+
+        drawn_serial = -1;
+
+        return;
+    }
+
+
+    if (full || drawn_serial != track_serial) {
+        drawn_serial = track_serial;
+        draw_static(t);
+    }
+
+
+    scr_setXY(0, ROW_STATUS);
+
+    scr_printf(
+        "Musica %d de %d | Aleatorio: %-3s | Repetir: %-5s   \n",
+        t->index + 1,
+        track_count,
+        shuffle ? "sim" : "nao",
+        repeat_names[repeat]
+    );
+
+
+    /*
+     * Barras (de cima para baixo).
+     */
+    for (r = BAR_ROWS; r >= 1; r--) {
+
+        scr_setXY(4, ROW_BARS + (BAR_ROWS - r));
+
+        for (i = 0; i < BARS; i++)
+            scr_printf(levels[i] >= r ? "## " : "   ");
+    }
+
+
+    seconds = elapsed_seconds(t);
+
+    filled = t->duration ? (int)(seconds * 32 / t->duration) : 0;
+
+    for (i = 0; i < 32; i++)
+        bar[i] = i < filled ? '#' : '-';
+
+    bar[32] = '\0';
+
+    format_mmss(elapsed, sizeof(elapsed), seconds);
+    format_mmss(total, sizeof(total), t->duration);
+
+    scr_setXY(0, ROW_TIME);
+
+    scr_printf("[%s] %s / %s   \n", bar, elapsed, t->duration ? total : "--:--");
+
+    scr_printf(
+        "%-8s %3d kbps  %5d Hz  %s       \n",
+        paused ? "PAUSADO" : "TOCANDO",
+        t->bitrate,
+        t->hz,
+        t->channels == 1 ? "mono" : "estereo"
+    );
+
+
+    /*
+     * Volume: 20 posicoes de 5%.
+     */
+    for (i = 0; i < 20; i++)
+        bar[i] = i < volume / 5 ? '#' : '-';
+
+    bar[20] = '\0';
+
+    scr_setXY(0, ROW_VOLUME);
+
+    scr_printf("Volume [%s] %3d%%  (CIMA/BAIXO)   \n", bar, volume);
+}
+
+
+void mp3player_now_playing(char *out, int size)
+{
+    const TrackState *t = &current;
+    char elapsed[8];
+    char total[8];
+
+    out[0] = '\0';
+
+    if (!playing || !t->name[0])
+        return;
+
+    format_mmss(elapsed, sizeof(elapsed), elapsed_seconds(t));
+    format_mmss(total, sizeof(total), t->duration);
+
+    if (t->id3.title[0])
+        snprintf(out, size, "%s: %.20s%s%.24s  %s / %s",
+                 paused ? "Pausado" : "Tocando",
+                 t->id3.artist,
+                 t->id3.artist[0] ? " - " : "",
+                 t->id3.title,
+                 elapsed,
+                 t->duration ? total : "--:--");
+    else
+        snprintf(out, size, "%s: %.44s  %s / %s",
+                 paused ? "Pausado" : "Tocando",
+                 t->name,
+                 elapsed,
+                 t->duration ? total : "--:--");
 }
