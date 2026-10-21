@@ -78,7 +78,11 @@ static int usbfmt_request(int cmd, const fatfmt_disk_t *disk, unsigned int value
     static fatfmt_request_t request __attribute__((aligned(64)));
     int result;
 
-    if (!usbfmt_ready())
+    /*
+     * Pendrive ou HDD ("ata"): basta o fatfmt (o HDD nao precisa
+     * da pilha USB).
+     */
+    if (!bdm_fatfmt_load())
         return -ENODEV;
 
     memset(&request, 0, sizeof(request));
@@ -179,7 +183,7 @@ const char *usbfmt_error_text(int code)
         return "erro do FatFs";
 
     if (code == ENODEV)
-        return "pendrive nao encontrado";
+        return "disco nao encontrado";
 
     return "erro";
 }

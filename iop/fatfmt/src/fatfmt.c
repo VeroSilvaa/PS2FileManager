@@ -550,11 +550,59 @@ static u64 part_last(u64 limit)
 }
 
 
+/*
+ * Total de setores que o disco realmente aceita: o PCSX2 recusa o
+ * ultimo setor do HDD (IDNF). Le e regrava o mesmo conteudo (nada
+ * muda) e recua ate dar certo. 0 = falhou.
+ */
+static u64 usable_total(struct block_device *bd)
+{
+    u64 total = bd->sectorCount;
+    int tries;
+
+    for (tries = 0; tries < 8 && total > PART_START; tries++, total--) {
+
+        if (disk_rw(bd, total - 1, work, 1, 0) == 0 &&
+            disk_rw(bd, total - 1, work, 1, 1) == 0) {
+
+            if (total != bd->sectorCount)
+                printf(MODNAME ": disco aceita %u de %u setores\n",
+                       (u32)total, (u32)bd->sectorCount);
+
+            return total;
+        }
+    }
+
+    return 0;
+}
+
+
+/*
+ * Ordem segura: tudo fora do setor 0 primeiro; o setor 0 (que
+ * decide o tipo do disco) so e gravado no fim. Se algo falhar no
+ * meio, a tabela antiga continua no lugar.
+ */
 static int write_mbr(struct block_device *bd, u64 total)
 {
     unsigned char *sector = work;
     u64 count;
     int result;
+
+    /*
+     * Inicio da particao (nenhum sistema de arquivos antigo) e
+     * cabecalhos GPT antigos (primario e reserva).
+     */
+    result = disk_zero(bd, PART_START, WORK_SIZE / SECTOR_SIZE);
+
+    if (result == 0)
+        result = disk_zero(bd, 1, 1);
+
+    if (result == 0)
+        result = disk_zero(bd, total - 1, 1);
+
+    if (result < 0)
+        return result;
+
 
     count = part_last(total - 1) - PART_START + 1;
 
@@ -568,21 +616,7 @@ static int write_mbr(struct block_device *bd, u64 total)
     sector[510] = 0x55;
     sector[511] = 0xAA;
 
-    result = disk_rw(bd, 0, sector, 1, 1);
-
-    if (result < 0)
-        return result;
-
-    /*
-     * Cabecalhos GPT antigos (primario e reserva) deixariam o disco
-     * ambiguo.
-     */
-    result = disk_zero(bd, 1, 1);
-
-    if (result < 0)
-        return result;
-
-    return disk_zero(bd, total - 1, 1);
+    return disk_rw(bd, 0, sector, 1, 1);
 }
 
 
@@ -625,6 +659,16 @@ static int write_gpt(struct block_device *bd, u64 total)
     u32 entries_crc;
     int result;
     int i;
+
+
+    /*
+     * Inicio da particao zerado antes de montar as entradas (o
+     * disk_zero usa o mesmo buffer).
+     */
+    result = disk_zero(bd, PART_START, WORK_SIZE / SECTOR_SIZE);
+
+    if (result < 0)
+        return result;
 
 
     rand_guid(disk_guid);
@@ -708,7 +752,10 @@ static int devctl_table(const fatfmt_request_t *req)
     if (!bd)
         return -ENODEV;
 
-    total = bd->sectorCount;
+    total = usable_total(bd);
+
+    if (total == 0)
+        return -FATFMT_ERR_IO;
 
     if (total < PART_START + 2 * 2048)
         return -FATFMT_ERR_TOO_SMALL;
@@ -723,12 +770,6 @@ static int devctl_table(const fatfmt_request_t *req)
     bdm_disconnect_bd(bd);
 
     result = req->value == FATFMT_TABLE_GPT ? write_gpt(bd, total) : write_mbr(bd, total);
-
-    /*
-     * Inicio da particao zerado: nenhum sistema de arquivos antigo.
-     */
-    if (result == 0)
-        result = disk_zero(bd, PART_START, WORK_SIZE / SECTOR_SIZE);
 
     if (bd->flush)
         bd->flush(bd);
@@ -882,7 +923,10 @@ static int devctl_wipe(const fatfmt_request_t *req)
     if (!bd)
         return -ENODEV;
 
-    total = bd->sectorCount;
+    total = usable_total(bd);
+
+    if (total == 0)
+        return -FATFMT_ERR_IO;
 
     if (total < PART_START + 64)
         return -FATFMT_ERR_TOO_SMALL;
@@ -897,10 +941,13 @@ static int devctl_wipe(const fatfmt_request_t *req)
     bdm_disconnect_bd(bd);
     set_detached(bd, 1);
 
-    result = disk_zero(bd, 0, PART_START);
+    /*
+     * Fim (GPT reserva) antes do inicio (setor 0 por ultimo).
+     */
+    result = disk_zero(bd, total - 1 - GPT_ENTRY_SECTORS, GPT_ENTRY_SECTORS + 1);
 
     if (result == 0)
-        result = disk_zero(bd, total - 1 - GPT_ENTRY_SECTORS, GPT_ENTRY_SECTORS + 1);
+        result = disk_zero(bd, 0, PART_START);
 
     if (bd->flush)
         bd->flush(bd);
