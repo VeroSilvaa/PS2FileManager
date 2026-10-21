@@ -41,6 +41,9 @@ extern unsigned int size_AUDSRV_irx;
 #define ROW_BARS         11
 #define ROW_TIME         18
 #define ROW_STATE        19
+#define ROW_VOLUME       20
+
+#define VOLUME_STEP      5
 
 typedef enum {
     REPEAT_OFF = 0,
@@ -328,12 +331,11 @@ static void draw_dynamic(const TrackState *t)
     scr_setXY(0, ROW_STATUS);
 
     scr_printf(
-        "Musica %d de %d | Aleatorio: %-3s | Repetir: %-5s | Vol %3d%%   \n",
+        "Musica %d de %d | Aleatorio: %-3s | Repetir: %-5s   \n",
         t->index + 1,
         track_count,
         shuffle ? "sim" : "nao",
-        repeat_names[repeat],
-        volume
+        repeat_names[repeat]
     );
 
 
@@ -375,6 +377,19 @@ static void draw_dynamic(const TrackState *t)
         t->hz,
         t->channels == 1 ? "mono" : "estereo"
     );
+
+
+    /*
+     * Volume: 20 posicoes de 5%.
+     */
+    for (i = 0; i < 20; i++)
+        bar[i] = i < volume / 5 ? '#' : '-';
+
+    bar[20] = '\0';
+
+    scr_setXY(0, ROW_VOLUME);
+
+    scr_printf("Volume [%s] %3d%%  (CIMA/BAIXO)   \n", bar, volume);
 }
 
 
@@ -509,7 +524,7 @@ static TrackResult play_track(const char *dir, int index, Mp3PadFn pad)
 
         if (buttons & (PAD_UP | PAD_DOWN)) {
 
-            volume += (buttons & PAD_UP) ? 10 : -10;
+            volume += (buttons & PAD_UP) ? VOLUME_STEP : -VOLUME_STEP;
 
             if (volume > MAX_VOLUME)
                 volume = MAX_VOLUME;
