@@ -39,6 +39,7 @@
 #include "settings.h"
 #include "usbfmt.h"
 #include "mp3player.h"
+#include "elfrun.h"
 
 
 
@@ -205,8 +206,14 @@ typedef enum {
     CONFIRM_DELETE,
     CONFIRM_MOVE,
     CONFIRM_RENAME,     /* so para arquivo de sistema do save */
-    CONFIRM_PASTE       /* colar copia: conferir SIM/NAO */
+    CONFIRM_PASTE,      /* colar copia: conferir SIM/NAO */
+    CONFIRM_RUN_ELF     /* executar um ELF */
 } ConfirmAction;
+
+/*
+ * ELF a executar (guardado ao abrir a confirmacao).
+ */
+static char run_elf_path[1024];
 
 /*
  * Conferencia byte a byte no Colar (copia). Comeca em SIM a cada
@@ -3400,9 +3407,9 @@ static int confirm_has_system(void)
         return 1;
 
     /*
-     * Copiar nao apaga nada: X confirma sempre.
+     * Copiar e executar nao apagam nada: X confirma sempre.
      */
-    if (confirm_action == CONFIRM_PASTE)
+    if (confirm_action == CONFIRM_PASTE || confirm_action == CONFIRM_RUN_ELF)
         return 0;
 
     if (confirm_action == CONFIRM_DELETE)
@@ -3476,6 +3483,23 @@ static void update_confirm(void)
 
             open_rename_keyboard();
 
+        } else if (action == CONFIRM_RUN_ELF) {
+
+            scr_clear();
+            scr_printf("PS2FileManager\n\nExecutando %s...\n", run_elf_path);
+
+            /*
+             * So volta em caso de erro.
+             */
+            elf_run(run_elf_path);
+
+            snprintf(
+                status_message,
+                sizeof(status_message),
+                "ELF: %s",
+                elf_error()
+            );
+
         } else {
 
             run_paste();
@@ -3507,6 +3531,20 @@ static void draw_confirm(void)
     scr_printf(
         "===============\n\n"
     );
+
+
+    if (confirm_action == CONFIRM_RUN_ELF) {
+
+        scr_printf("EXECUTAR ESTE PROGRAMA?\n\n");
+        scr_printf("  %.70s\n\n", run_elf_path);
+
+        scr_printf("O PS2FileManager sera fechado (o IOP e reiniciado).\n");
+        scr_printf("A musica, se estiver tocando, para.\n\n");
+
+        scr_printf("X executar | O cancelar\n");
+
+        return;
+    }
 
 
     if (confirm_action == CONFIRM_PASTE) {
@@ -4779,6 +4817,34 @@ static void update_file_screen(void)
         is_partition_list()) {
 
         enter_partition();
+
+        return;
+    }
+
+
+    /*
+     * X num .elf: confirma e executa (como o wLaunchELF).
+     */
+    if (pressed(PAD_CROSS) &&
+        file_manager.count > 0 &&
+        !file_manager.entries[file_manager.cursor].is_dir &&
+        elf_is_elf(file_manager.entries[file_manager.cursor].name)) {
+
+        snprintf(
+            run_elf_path,
+            sizeof(run_elf_path),
+            "%s",
+            file_manager.entries[file_manager.cursor].path
+        );
+
+        if (!elf_check(run_elf_path)) {
+
+            set_status("Este arquivo nao e um ELF valido.");
+
+            return;
+        }
+
+        confirm_action = CONFIRM_RUN_ELF;
 
         return;
     }

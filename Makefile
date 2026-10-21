@@ -1,6 +1,6 @@
 EE_BIN = PS2FileManager.elf
 
-EE_OBJS = src/main.o src/memorycard.o src/filemanager.o src/clipboard.o src/fm_fileio.o src/network.o src/smb.o src/dev9.o src/hdd.o src/usb.o src/iso9660.o src/hdl.o src/osk.o src/config.o src/settings.o src/usbfmt.o src/bdmcore.o src/id3.o src/mp3dec.o src/mp3player.o
+EE_OBJS = src/main.o src/memorycard.o src/filemanager.o src/clipboard.o src/fm_fileio.o src/network.o src/smb.o src/dev9.o src/hdd.o src/usb.o src/iso9660.o src/hdl.o src/osk.o src/config.o src/settings.o src/usbfmt.o src/bdmcore.o src/id3.o src/mp3dec.o src/mp3player.o src/elfrun.o
 
 # Modulos IOP do PS2SDK embutidos no ELF (mesmo modelo do wLaunchELF)
 IRX_OBJS = irx/iomanX_irx.o irx/fileXio_irx.o irx/mcman_irx.o irx/mcserv_irx.o
@@ -26,7 +26,7 @@ EE_OBJS += $(IRX_OBJS)
 
 EE_INCS = -I$(PS2SDK)/ee/include -I$(PS2SDK)/common/include -Iinclude -Ithird_party/minimp3
 
-EE_LIBS = -laudsrv -lpad -lmc -lfileXio -lnetman -lps2ips -lpatches -ldebug -lkernel
+EE_LIBS = -lelf-loader-nocolour -laudsrv -lpad -lmc -lfileXio -lnetman -lps2ips -lpatches -ldebug -lkernel
 
 EE_CFLAGS = -O2 -G0 -Wall
 
