@@ -92,6 +92,11 @@ extern unsigned int size_mcserv_irx;
  */
 #define SMB_DHCP_TIMEOUT    20
 
+/*
+ * Etapas da conexao SMB: rede, IP, compartilhamento.
+ */
+#define SMB_STEPS           3
+
 #define DEVICE_COUNT        7
 #define DEVICE_SMB          2
 #define DEVICE_HDD          3
@@ -285,6 +290,68 @@ static int hdl_state[HDL_MAX_GAMES];
 static char hdl_found[HDL_MAX_GAMES][40];
 static unsigned int hdl_free_mb = 0;
 static int hdl_cursor = 0;
+
+
+/*
+ * Janela "trabalhando" (conectar, iniciar dispositivos, formatar,
+ * particoes): texto, detalhe e, se houver, as etapas. Desenhada por
+ * draw_gui_busy; a cada gfx_frame os pontos giram.
+ */
+typedef struct {
+    char title[64];
+    char text[128];
+    char detail[128];
+    int step;
+    int total;          /* 0 = sem barra de etapas */
+} GuiBusy;
+
+static GuiBusy gbusy;
+
+static void draw_gui_busy(void);
+
+
+static void busy_show(const char *title, const char *text, const char *detail, int step, int total)
+{
+    snprintf(gbusy.title, sizeof(gbusy.title), "%s", title);
+    snprintf(gbusy.text, sizeof(gbusy.text), "%s", text);
+    snprintf(gbusy.detail, sizeof(gbusy.detail), "%s", detail ? detail : "");
+
+    gbusy.step = step;
+    gbusy.total = total;
+
+    gfx_set_screen(draw_gui_busy);
+    gfx_frame();
+}
+
+
+/*
+ * Troca so a linha de detalhe da janela aberta.
+ */
+static void busy_detail(const char *detail)
+{
+    snprintf(gbusy.detail, sizeof(gbusy.detail), "%s", detail);
+
+    gfx_frame();
+}
+
+
+/*
+ * Janela de erro (vermelha) por cima da tela: mostra o status_message
+ * ate X ou O.
+ */
+static int error_open = 0;
+static char error_title[64];
+static char error_text[256];
+
+static char status_message[256];    /* definida abaixo */
+
+static void error_popup(const char *title)
+{
+    snprintf(error_title, sizeof(error_title), "%s", title);
+    snprintf(error_text, sizeof(error_text), "%s", status_message);
+
+    error_open = 1;
+}
 
 /*
  * Conferencia completa (rele tudo): opcional, dobra o tempo.
@@ -541,26 +608,28 @@ static int smb_ensure_connected(void)
 
     config = config_get();
 
-    scr_clear();
+    {
+        char text[128];
 
-    scr_printf("PS2FileManager\n");
-    scr_printf("===============\n\n");
-    scr_printf("Conectando ao SMB...\n\n");
-    scr_printf("Servidor: %s\n", config->smb_server);
-    scr_printf("Share   : %s\n", config->smb_share);
-    scr_printf("Usuario : %s\n", config->smb_user);
-    scr_printf("Rede    : %s\n\n", config->dhcp ? "DHCP" : config->ip);
+        snprintf(text, sizeof(text), "%s/%s (usuário %s)", config->smb_server, config->smb_share,
+                 config->smb_user);
+
+        busy_show("Conectando ao SMB", text, NULL, 0, SMB_STEPS);
+    }
 
 
     if (!network_ready) {
 
-        scr_printf("Iniciando rede (DEV9/SMAP/PS2IP)...\n");
+        gbusy.step = 0;
+        busy_detail("Iniciando a rede (DEV9, SMAP, PS2IP)…");
 
         if (network_init() < 0) {
 
             set_status(
                 "ERRO rede: falha ao carregar modulos."
             );
+
+            error_popup("Erro na rede");
 
             return 0;
         }
@@ -573,6 +642,8 @@ static int smb_ensure_connected(void)
                     : "ERRO rede: IP estatico invalido."
             );
 
+            error_popup("Erro na rede");
+
             return 0;
         }
 
@@ -580,7 +651,8 @@ static int smb_ensure_connected(void)
     }
 
 
-    scr_printf(config->dhcp ? "Aguardando DHCP" : "Aguardando link");
+    gbusy.step = 1;
+    busy_detail(config->dhcp ? "Obtendo IP (DHCP)…" : "Aguardando o link de rede…");
 
     start = clock();
     seconds = 0;
@@ -613,32 +685,43 @@ static int smb_ensure_connected(void)
                 net->link_up
             );
 
+            error_popup("Erro na rede");
+
             return 0;
         }
 
         /*
-         * Espera ~250 ms entre consultas.
+         * Espera ~250 ms entre consultas (desenhando: os pontos giram).
          */
         tick = clock();
 
-        while (clock() - tick < CLOCKS_PER_SEC / 4) {
-        }
+        while (clock() - tick < CLOCKS_PER_SEC / 4)
+            gfx_frame();
 
         if ((clock() - start) / CLOCKS_PER_SEC > seconds) {
 
+            char detail[64];
+
             seconds++;
 
-            scr_printf(".");
+            snprintf(detail, sizeof(detail), "%s… %d s",
+                     config->dhcp ? "Obtendo IP (DHCP)" : "Aguardando o link de rede", seconds);
+            busy_detail(detail);
         }
     }
 
 
-    scr_printf("\nIP do PS2: %s\n\n", net->ip);
-
     printf("FM SMB: rede pronta, IP %s\n", net->ip);
 
 
-    scr_printf("Abrindo compartilhamento...\n");
+    {
+        char detail[96];
+
+        snprintf(detail, sizeof(detail), "IP %s. Entrando no compartilhamento…", net->ip);
+
+        gbusy.step = 2;
+        busy_detail(detail);
+    }
 
     if (smb_init() < 0 ||
         smb_connect(
@@ -653,6 +736,8 @@ static int smb_ensure_connected(void)
             "ERRO SMB: %s",
             smb->error
         );
+
+        error_popup("Erro no SMB");
 
         return 0;
     }
@@ -725,9 +810,13 @@ static int hdd_fat_mounted(void)
 
 static void open_hdd_fat(void)
 {
+    busy_detail("HDD em MBR/GPT: montando exFAT/FAT32 (ata0:)…");
+
     if (!hdd_fat_mounted()) {
 
         set_status("HDD em MBR/GPT sem exFAT/FAT32 montavel: R1 para formatar.");
+
+        error_popup("HDD interno");
 
         return;
     }
@@ -742,11 +831,7 @@ static void open_hdd_fat(void)
 
 static void open_hdd(void)
 {
-    scr_clear();
-
-    scr_printf("PS2FileManager\n");
-    scr_printf("===============\n\n");
-    scr_printf("Iniciando HDD (DEV9/ATAD/APA/PFS)...\n");
+    busy_show("Abrindo o HDD interno", "Iniciando DEV9, ATA, APA e PFS…", NULL, 0, 0);
 
 
     if (hdd_init() < 0) {
@@ -769,9 +854,13 @@ static void open_hdd(void)
             hdd_error()
         );
 
+        error_popup("HDD interno");
+
         return;
     }
 
+
+    busy_detail("Lendo as partições…");
 
     fm_init(
         &file_manager,
@@ -950,12 +1039,8 @@ static void open_usb(int unit)
 
     if (!usb_ready()) {
 
-        scr_clear();
-
-        scr_printf("PS2FileManager\n");
-        scr_printf("===============\n\n");
-        scr_printf("Iniciando USB (USBD/BDM/FATFS)...\n");
-        scr_printf("Procurando pendrives...\n");
+        busy_show("Abrindo o pendrive", "Iniciando USB (USBD, BDM, FATFS)…",
+                  "Procurando pendrives…", 0, 0);
 
         if (usb_init() < 0) {
 
@@ -965,6 +1050,8 @@ static void open_usb(int unit)
                 "ERRO USB: %s",
                 usb_error()
             );
+
+            error_popup("Pendrive");
 
             return;
         }
@@ -982,6 +1069,8 @@ static void open_usb(int unit)
             "Pendrive " USB_PREFIX "%d: nao encontrado.",
             unit
         );
+
+        error_popup("Pendrive");
 
         return;
     }
@@ -1605,46 +1694,6 @@ static GuiProgress gprog;
 
 static void draw_gui_progress(void);
 
-/*
- * Janela "trabalhando" (formatacao, particoes): texto e, se houver,
- * as etapas. Desenhada por draw_gui_busy.
- */
-typedef struct {
-    char title[64];
-    char text[128];
-    char detail[128];
-    int step;
-    int total;          /* 0 = sem barra de etapas */
-} GuiBusy;
-
-static GuiBusy gbusy;
-
-static void draw_gui_busy(void);
-
-
-static void busy_show(const char *title, const char *text, const char *detail, int step, int total)
-{
-    snprintf(gbusy.title, sizeof(gbusy.title), "%s", title);
-    snprintf(gbusy.text, sizeof(gbusy.text), "%s", text);
-    snprintf(gbusy.detail, sizeof(gbusy.detail), "%s", detail ? detail : "");
-
-    gbusy.step = step;
-    gbusy.total = total;
-
-    gfx_set_screen(draw_gui_busy);
-    gfx_frame();
-}
-
-
-/*
- * Troca so a linha de detalhe da janela aberta.
- */
-static void busy_detail(const char *detail)
-{
-    snprintf(gbusy.detail, sizeof(gbusy.detail), "%s", detail);
-
-    gfx_frame();
-}
 static int gui_current_device(void);
 
 
@@ -6387,6 +6436,69 @@ static void draw_gui_busy(void)
 
 
 /*
+ * Erro (vermelho): titulo, a mensagem quebrada em linhas, X/O fecha.
+ */
+static void gui_error(void)
+{
+    float x = 110;
+    float w = 420;
+    float y;
+    const char *p = error_text;
+    int lines = 0;
+
+    gfx_rect(0, 0, GFX_W, GFX_H, UI_DIM);
+
+    gfx_rect(x, 130, w, 180, UI_WINDOW);
+    gfx_rect_vgradient(x + 2, 132, w - 4, 26, gfx_rgba(0xB0, 0x28, 0x30, 0x80), gfx_rgba(0x60, 0x10, 0x18, 0x80));
+    gfx_border(x, 130, w, 180, 2, UI_ERROR);
+    gfx_text_fit(x + 12, 135, w - 24, error_title, UI_TEXT);
+
+    y = 172;
+
+    /*
+     * Quebra por palavras na largura da janela (ate 5 linhas).
+     */
+    while (*p && lines < 5) {
+
+        char line[128];
+        int length = 0;
+        int last_space = -1;
+
+        while (p[length] && length < (int)sizeof(line) - 1) {
+
+            line[length] = p[length];
+            line[length + 1] = '\0';
+
+            if (gfx_text_width(line) > w - 32)
+                break;
+
+            if (p[length] == ' ')
+                last_space = length;
+
+            length++;
+        }
+
+        if (p[length] && last_space > 0)
+            length = last_space + 1;
+
+        if (length == 0)
+            length = 1;
+
+        memcpy(line, p, length);
+        line[length] = '\0';
+
+        gfx_text(x + 16, y, line, lines == 0 ? UI_ERROR : UI_TEXT);
+
+        p += length;
+        y += 20;
+        lines++;
+    }
+
+    gfx_button_hint(x + 16, 130 + 180 - 32, GFX_BTN_CROSS, "OK");
+}
+
+
+/*
  * Formatacao (lista de dispositivos, R1): disco, formato e as duas
  * confirmacoes.
  */
@@ -7074,7 +7186,9 @@ static void draw_gui_browser(void)
     /*
      * Janelas por cima (a lista escurecida atras).
      */
-    if (current_screen == SCREEN_SETTINGS)
+    if (error_open)
+        gui_error();
+    else if (current_screen == SCREEN_SETTINGS)
         settings_draw_gui();
     else if (current_screen == SCREEN_DEVICES && format_step != FORMAT_NONE)
         gui_format();
@@ -7311,7 +7425,13 @@ int main(int argc, char *argv[])
         /*
          * SELECT: volta a tela do player (musica em segundo plano).
          */
-        if (pressed(PAD_SELECT) && mp3player_active() && screen_is_plain()) {
+        if (error_open) {
+            /*
+             * Janela de erro: so X ou O fecham.
+             */
+            if (pressed(PAD_CROSS) || pressed(PAD_CIRCLE))
+                error_open = 0;
+        } else if (pressed(PAD_SELECT) && mp3player_active() && screen_is_plain()) {
             show_mp3_player();
         } else if (current_screen == SCREEN_DEVICES) {
             update_device_screen();
