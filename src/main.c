@@ -4706,16 +4706,30 @@ static void update_settings_screen(void)
  */
 static AppScreen player_return_screen = SCREEN_FILES;
 
+/*
+ * Botoes do player (ESQUERDA/DIREITA escolhe, X aciona).
+ */
+enum {
+    PLAYER_BTN_PREV = 0,
+    PLAYER_BTN_PLAY,
+    PLAYER_BTN_NEXT,
+    PLAYER_BTN_STOP,
+    PLAYER_BTN_SHUFFLE,
+    PLAYER_BTN_REPEAT,
+    PLAYER_BUTTONS
+};
+
+static int player_focus = PLAYER_BTN_PLAY;
+
 
 static void show_mp3_player(void)
 {
     player_return_screen = current_screen;
 
+    /*
+     * O draw_screen() do laco principal liga o desenho grafico.
+     */
     current_screen = SCREEN_PLAYER;
-
-    scr_clear();
-
-    mp3player_draw(1);
 }
 
 
@@ -4756,19 +4770,47 @@ static void update_player_screen(void)
         return;
     }
 
-    if (pressed(PAD_START)) {
+    if (pressed(PAD_LEFT))
+        player_focus = (player_focus + PLAYER_BUTTONS - 1) % PLAYER_BUTTONS;
 
-        mp3player_stop();
+    if (pressed(PAD_RIGHT))
+        player_focus = (player_focus + 1) % PLAYER_BUTTONS;
 
-        current_screen = player_return_screen;
-
-        set_status("MP3: parado.");
-
-        return;
-    }
-
-    if (pressed(PAD_CROSS))
+    if (pressed(PAD_START))
         mp3player_command(MP3_CMD_PAUSE);
+
+    if (pressed(PAD_CROSS)) {
+
+        switch (player_focus) {
+
+            case PLAYER_BTN_PREV:
+                mp3player_command(MP3_CMD_PREV);
+                break;
+
+            case PLAYER_BTN_PLAY:
+                mp3player_command(MP3_CMD_PAUSE);
+                break;
+
+            case PLAYER_BTN_NEXT:
+                mp3player_command(MP3_CMD_NEXT);
+                break;
+
+            case PLAYER_BTN_STOP:
+                mp3player_stop();
+                player_focus = PLAYER_BTN_PLAY;
+                current_screen = player_return_screen;
+                set_status("MP3: parado.");
+                return;
+
+            case PLAYER_BTN_SHUFFLE:
+                mp3player_command(MP3_CMD_SHUFFLE);
+                break;
+
+            default:
+                mp3player_command(MP3_CMD_REPEAT);
+                break;
+        }
+    }
 
     if (pressed(PAD_R1))
         mp3player_command(MP3_CMD_NEXT);
@@ -4830,17 +4872,11 @@ static void draw_periodic(void)
     static clock_t last = 0;
     clock_t now = clock();
 
-    if (current_screen == SCREEN_PLAYER) {
-
-        if (now - last < CLOCKS_PER_SEC / 8)
-            return;
-
-        last = now;
-
-        mp3player_draw(0);
-
+    /*
+     * Player grafico: redesenhado a cada quadro pelo gfx.
+     */
+    if (current_screen == SCREEN_PLAYER)
         return;
-    }
 
     if (!mp3player_active() || !screen_is_plain() || now - last < CLOCKS_PER_SEC)
         return;
@@ -6212,6 +6248,258 @@ static void draw_gui_progress(void)
 }
 
 
+/*
+ * Player de MP3: quadro da capa (barras animadas ate a capa ser
+ * desenhada), informacoes da tag, tempo e controles.
+ */
+#define TIME_BAR_W      468
+
+/*
+ * Icone 16x16 dos botoes do player.
+ */
+static void gui_player_icon(int button, int paused, float x, float y, gfx_color c)
+{
+    switch (button) {
+
+        case PLAYER_BTN_PREV:
+            gfx_rect(x, y + 2, 2, 12, c);
+            gfx_triangle(x + 2, y + 8, x + 9, y + 2, x + 9, y + 14, c);
+            gfx_triangle(x + 8, y + 8, x + 15, y + 2, x + 15, y + 14, c);
+            break;
+
+        case PLAYER_BTN_PLAY:
+            if (paused) {
+                gfx_triangle(x + 3, y + 1, x + 3, y + 15, x + 15, y + 8, c);
+            } else {
+                gfx_rect(x + 3, y + 2, 4, 12, c);
+                gfx_rect(x + 10, y + 2, 4, 12, c);
+            }
+            break;
+
+        case PLAYER_BTN_NEXT:
+            gfx_triangle(x + 1, y + 2, x + 1, y + 14, x + 8, y + 8, c);
+            gfx_triangle(x + 7, y + 2, x + 7, y + 14, x + 14, y + 8, c);
+            gfx_rect(x + 14, y + 2, 2, 12, c);
+            break;
+
+        case PLAYER_BTN_STOP:
+            gfx_rect(x + 3, y + 3, 10, 10, c);
+            break;
+
+        case PLAYER_BTN_SHUFFLE:
+            /*
+             * Duas setas cruzadas.
+             */
+            gfx_line(x, y + 3, x + 12, y + 12, c);
+            gfx_line(x, y + 4, x + 12, y + 13, c);
+            gfx_line(x, y + 12, x + 12, y + 3, c);
+            gfx_line(x, y + 13, x + 12, y + 4, c);
+            gfx_triangle(x + 11, y, x + 16, y + 4, x + 11, y + 8, c);
+            gfx_triangle(x + 11, y + 8, x + 16, y + 12, x + 11, y + 16, c);
+            break;
+
+        default:
+            /*
+             * Laco com seta.
+             */
+            gfx_border(x + 1, y + 4, 14, 9, 2, c);
+            gfx_triangle(x + 8, y + 1, x + 13, y + 5, x + 8, y + 9, c);
+            break;
+    }
+}
+
+static void draw_gui_player(void)
+{
+    static const char *repeat_names[] = { "não", "uma", "todas" };
+    Mp3Status s;
+    char line[96];
+    char a[16];
+    char b[16];
+    float frame_x = 40;
+    float frame_y = 72;
+    float frame = 220;
+    float info_x = 284;
+    float info_w = 332;
+    float y;
+    int i;
+
+
+    mp3player_status(&s);
+
+    gui_header();
+
+
+    /*
+     * Quadro da capa.
+     */
+    gfx_rect(frame_x, frame_y, frame, frame, UI_PANEL);
+    gfx_border(frame_x, frame_y, frame, frame, 2, UI_BORDER);
+
+    /*
+     * Espectro: sobe rapido, cai suave (por quadro, nao por frame de
+     * MP3); o pico fica parado um pouco e depois cai.
+     */
+    for (i = 0; i < MP3_STATUS_BARS; i++) {
+
+        static float shown[MP3_STATUS_BARS];
+        static float peak[MP3_STATUS_BARS];
+        static int peak_hold[MP3_STATUS_BARS];
+
+        float bar_w = (frame - 24) / MP3_STATUS_BARS;
+        float max_h = frame - 32;
+        float bx = frame_x + 12 + i * bar_w;
+        float base = frame_y + frame - 14;
+        float target = s.spectrum[i];
+        float bar_h;
+
+        if (target > shown[i])
+            shown[i] += (target - shown[i]) * 0.6f;
+        else
+            shown[i] = shown[i] - 2.0f > target ? shown[i] - 2.0f : target;
+
+        if (shown[i] >= peak[i]) {
+            peak[i] = shown[i];
+            peak_hold[i] = 25;
+        } else if (peak_hold[i] > 0) {
+            peak_hold[i]--;
+        } else {
+            peak[i] -= 1.0f;
+        }
+
+        bar_h = max_h * shown[i] / 100;
+
+        gfx_rect(bx + 1, base - max_h, bar_w - 3, max_h, gfx_rgba(0x10, 0x1C, 0x38, 0x50));
+
+        if (bar_h >= 1)
+            gfx_rect_vgradient(bx + 1, base - bar_h, bar_w - 3, bar_h, UI_SEL_BOTTOM, UI_SEL_TOP);
+
+        if (peak[i] > 1)
+            gfx_rect(bx + 1, base - max_h * peak[i] / 100 - 3, bar_w - 3, 2, UI_TEXT);
+    }
+
+
+    /*
+     * Informacoes.
+     */
+    gui_panel(info_x, frame_y, info_w, frame, s.active ? (s.paused ? "Pausado" : "Tocando") : "Parado");
+
+    y = frame_y + 36;
+
+    if (!s.active) {
+
+        gfx_text_fit(info_x + 14, y, info_w - 28,
+                     mp3player_error()[0] ? mp3player_error() : "A playlist terminou.",
+                     mp3player_error()[0] ? UI_ERROR : UI_TEXT2);
+
+    } else {
+
+        gfx_text_fit(info_x + 14, y, info_w - 28, s.title[0] ? s.title : s.name, UI_TEXT);
+        gfx_text_fit(info_x + 14, y + 24, info_w - 28, s.artist[0] ? s.artist : "Artista desconhecido", UI_SEL_BOTTOM);
+        gfx_text_fit(info_x + 14, y + 48, info_w - 28, s.album[0] ? s.album : "-", UI_TEXT2);
+
+        snprintf(line, sizeof(line), "Faixa %s   |   Música %d de %d",
+                 s.track[0] ? s.track : "-", s.index + 1, s.count);
+        gfx_text(info_x + 14, y + 84, line, UI_TEXT2);
+
+        snprintf(line, sizeof(line), "%d kbps  |  %d Hz  |  %s",
+                 s.bitrate, s.hz, s.channels == 1 ? "mono" : "estéreo");
+        gfx_text(info_x + 14, y + 108, line, UI_TEXT2);
+
+        snprintf(line, sizeof(line), "Aleatório: %s   |   Repetir: %s",
+                 s.shuffle ? "sim" : "não", repeat_names[s.repeat]);
+        gfx_text(info_x + 14, y + 132, line, s.shuffle || s.repeat ? UI_OK : UI_TEXT2);
+
+        gfx_text_fit(info_x + 14, y + 156, info_w - 28, s.name, UI_TEXT_OFF);
+    }
+
+
+    /*
+     * Tempo.
+     */
+    y = frame_y + frame + 16;
+
+    format_time(a, sizeof(a), s.elapsed);
+    format_time(b, sizeof(b), s.duration);
+
+    gfx_text(frame_x, y - 2, a, UI_TEXT);
+    gfx_text_right(UI_DEV_X + 592, y - 2, s.duration ? b : "--:--", UI_TEXT);
+
+    gfx_rect(frame_x + 52, y + 3, TIME_BAR_W, 10, gfx_rgba(0x1A, 0x27, 0x47, 0x80));
+
+    if (s.duration)
+        gfx_rect_vgradient(frame_x + 52, y + 3, (float)TIME_BAR_W * s.elapsed / s.duration, 10,
+                           UI_SEL_BOTTOM, UI_SEL_TOP);
+
+    gfx_border(frame_x + 52, y + 3, TIME_BAR_W, 10, 1, UI_BORDER);
+
+
+    /*
+     * Volume.
+     */
+    y += 28;
+
+    snprintf(line, sizeof(line), "Volume %d%%", s.volume);
+    gfx_text(frame_x, y, line, UI_TEXT2);
+
+    gfx_rect(frame_x + 110, y + 6, 160, 8, gfx_rgba(0x1A, 0x27, 0x47, 0x80));
+    gfx_rect(frame_x + 110, y + 6, 160.0f * s.volume / 100, 8, UI_OK);
+    gfx_border(frame_x + 110, y + 6, 160, 8, 1, UI_BORDER);
+    {
+        float bx = frame_x + 290;
+
+        bx += gfx_button_hint(bx, y, GFX_BTN_UP, "Mais") - 8;
+        gfx_button_hint(bx, y, GFX_BTN_DOWN, "Menos");
+    }
+
+
+    /*
+     * Controles.
+     */
+    gfx_rect(UI_DEV_X, 368, 592, 2, UI_BORDER);
+
+    for (i = 0; i < PLAYER_BUTTONS; i++) {
+
+        static const char *repeat_labels[] = { "Repetir", "Rep.: uma", "Rep.: todas" };
+        const char *label;
+        float bx = UI_DEV_X + i * (592.0f / PLAYER_BUTTONS) + 2;
+        float bw = 592.0f / PLAYER_BUTTONS - 4;
+        int on = (i == PLAYER_BTN_SHUFFLE && s.shuffle) || (i == PLAYER_BTN_REPEAT && s.repeat);
+        gfx_color color = player_focus == i ? UI_TEXT : on ? UI_OK : UI_TEXT2;
+
+        if (player_focus == i)
+            gfx_rect_vgradient(bx, 376, bw, 30, UI_SEL_BOTTOM, UI_SEL_TOP);
+        else
+            gfx_rect(bx, 376, bw, 30, UI_PANEL);
+
+        gfx_border(bx, 376, bw, 30, 1, on ? UI_OK : UI_BORDER);
+
+        switch (i) {
+            case PLAYER_BTN_PREV:    label = "Anterior"; break;
+            case PLAYER_BTN_PLAY:    label = s.paused ? "Tocar" : "Pausar"; break;
+            case PLAYER_BTN_NEXT:    label = "Próxima"; break;
+            case PLAYER_BTN_STOP:    label = "Parar"; break;
+            case PLAYER_BTN_SHUFFLE: label = "Aleatório"; break;
+            default:                 label = repeat_labels[s.repeat]; break;
+        }
+
+        gui_player_icon(i, s.paused, bx + 6, 383, color);
+        gfx_text_fit(bx + 26, 381, bw - 30, label, color);
+    }
+
+    {
+        float bx = UI_DEV_X + 4;
+
+        bx += gfx_button_hint(bx, 418, GFX_BTN_LEFT, "") - 18;
+        bx += gfx_button_hint(bx, 418, GFX_BTN_RIGHT, "Escolher");
+        bx += gfx_button_hint(bx, 418, GFX_BTN_CROSS, "Acionar");
+        bx += gfx_button_hint(bx, 418, GFX_BTN_START, s.paused ? "Tocar" : "Pausar");
+        bx += gfx_button_hint(bx, 418, GFX_BTN_L1, "") - 18;
+        bx += gfx_button_hint(bx, 418, GFX_BTN_R1, "Faixa");
+        gfx_button_hint(bx, 418, GFX_BTN_CIRCLE, "Voltar");
+    }
+}
+
+
 static void draw_gui_browser(void)
 {
     int files = current_screen == SCREEN_FILES;
@@ -6244,6 +6532,9 @@ static void draw_gui_browser(void)
  */
 static int gui_handles_screen(void)
 {
+    if (current_screen == SCREEN_PLAYER)
+        return 1;
+
     if (current_screen == SCREEN_DEVICES)
         return format_step == FORMAT_NONE;
 
@@ -6282,7 +6573,7 @@ static void draw_screen(void)
      */
     if (gui_handles_screen()) {
 
-        gfx_set_screen(draw_gui_browser);
+        gfx_set_screen(current_screen == SCREEN_PLAYER ? draw_gui_player : draw_gui_browser);
 
         return;
     }
@@ -6299,10 +6590,6 @@ static void draw_screen(void)
         scr_clear();
 
         settings_draw();
-
-    } else if (current_screen == SCREEN_PLAYER) {
-
-        mp3player_draw(1);
 
     } else {
 

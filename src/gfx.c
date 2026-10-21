@@ -581,6 +581,27 @@ int gfx_button_hint(float x, float y, GfxButton button, const char *label)
             break;
         }
 
+        case GFX_BTN_UP:
+        case GFX_BTN_DOWN:
+        case GFX_BTN_LEFT:
+        case GFX_BTN_RIGHT: {
+            /*
+             * Direcional: seta numa caixa.
+             */
+            gfx_rect(x, y + 1, icon_w, 17, gfx_rgba(0xC8, 0xD4, 0xEE, 0x70));
+
+            if (button == GFX_BTN_UP)
+                gfx_triangle(x + 9, y + 5, x + 3, y + 14, x + 15, y + 14, dark);
+            else if (button == GFX_BTN_DOWN)
+                gfx_triangle(x + 3, y + 5, x + 15, y + 5, x + 9, y + 14, dark);
+            else if (button == GFX_BTN_LEFT)
+                gfx_triangle(x + 4, y + 10, x + 13, y + 4, x + 13, y + 16, dark);
+            else
+                gfx_triangle(x + 14, y + 10, x + 5, y + 4, x + 5, y + 16, dark);
+
+            break;
+        }
+
         default:
             /*
              * L1/R1/SELECT/START: rotulo numa caixa.

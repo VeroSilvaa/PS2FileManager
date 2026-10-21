@@ -62,4 +62,42 @@ void mp3player_now_playing(char *out, int size);
 
 const char *mp3player_error(void);
 
+/*
+ * Retrato do estado para a interface grafica (copias, seguras de
+ * ler na thread principal).
+ */
+#define MP3_STATUS_BARS 16
+
+typedef struct {
+    int active;
+    int paused;
+    int shuffle;
+    int repeat;                 /* 0 nao, 1 uma, 2 todas */
+    int volume;                 /* 0..100 */
+
+    int index;                  /* 0.. */
+    int count;
+
+    char name[96];              /* arquivo */
+    char title[64];
+    char artist[64];
+    char album[64];
+    char track[8];
+
+    int has_cover;
+    unsigned int cover_size;
+    char cover_mime[16];
+
+    int hz;
+    int channels;
+    int bitrate;
+
+    unsigned int elapsed;       /* segundos */
+    unsigned int duration;      /* 0 = desconhecida */
+
+    int spectrum[MP3_STATUS_BARS];  /* 0..100, graves a esquerda */
+} Mp3Status;
+
+void mp3player_status(Mp3Status *status);
+
 #endif

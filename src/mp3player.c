@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <math.h>
 #include <time.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -109,6 +110,7 @@ static RepeatMode repeat = REPEAT_OFF;
 static int volume = MAX_VOLUME;
 
 static int levels[BARS];
+static int spectrum[BARS];      /* 0..100, interface grafica */
 
 static TrackState current;
 
@@ -334,37 +336,125 @@ static unsigned int vbr_frames(const unsigned char *frame, int available)
 
 
 /*
- * Nivel de cada barra a partir de uma fatia do frame decodificado.
+ * Espectro: Goertzel em 16 frequencias (escala logaritmica de
+ * 60 Hz a 14 kHz) sobre o frame decodificado, em mono. Cada faixa
+ * soma 3 frequencias vizinhas (uma so e estreita demais). Resultado
+ * em dB, de -54 dB (0) a 0 dB (100).
  */
-static void update_levels(const mp3d_sample_t *samples, int count, int channels)
-{
-    static const int thresholds[BAR_ROWS] = { 300, 900, 2000, 4000, 8000, 14000 };
-    int slice = count / BARS;
-    int i;
-    int j;
+#define SPECTRUM_LOW     60.0f
+#define SPECTRUM_HIGH    14000.0f
+#define SPECTRUM_TAPS    3
+#define SPECTRUM_FLOOR   -54.0f
 
-    if (slice <= 0)
+static float goertzel_coeff[BARS][SPECTRUM_TAPS];
+static int goertzel_rate = 0;
+static float mono[MINIMP3_MAX_SAMPLES_PER_FRAME / 2];
+static float hann[MINIMP3_MAX_SAMPLES_PER_FRAME / 2];
+static int hann_count = 0;
+
+static void spectrum_prepare(int hz)
+{
+    int i;
+    int t;
+
+    if (hz == goertzel_rate)
         return;
 
     for (i = 0; i < BARS; i++) {
 
-        long sum = 0;
-        int level = 0;
-        int average;
+        float center = SPECTRUM_LOW * powf(SPECTRUM_HIGH / SPECTRUM_LOW, (float)i / (BARS - 1));
 
-        for (j = 0; j < slice; j++) {
-            int v = samples[(i * slice + j) * channels];
-            sum += v < 0 ? -v : v;
+        for (t = 0; t < SPECTRUM_TAPS; t++) {
+
+            float f = center * (0.85f + 0.15f * t);
+
+            if (f > hz * 0.45f)
+                f = hz * 0.45f;
+
+            goertzel_coeff[i][t] = 2.0f * cosf(2.0f * 3.14159265f * f / hz);
+        }
+    }
+
+    goertzel_rate = hz;
+}
+
+
+static void update_levels(const mp3d_sample_t *samples, int count, int channels, int hz)
+{
+    float scale;
+    int i;
+    int j;
+    int t;
+
+    if (count <= 0 || hz <= 0)
+        return;
+
+    spectrum_prepare(hz);
+
+    /*
+     * Mono com janela de Hann (menos "vazamento" entre faixas).
+     */
+    if (count != hann_count) {
+
+        for (j = 0; j < count; j++)
+            hann[j] = 0.5f - 0.5f * cosf(2.0f * 3.14159265f * j / (count - 1));
+
+        hann_count = count;
+    }
+
+    for (j = 0; j < count; j++) {
+
+        float v = samples[j * channels];
+
+        if (channels > 1)
+            v = (v + samples[j * channels + 1]) * 0.5f;
+
+        mono[j] = v * hann[j];
+    }
+
+    /*
+     * Seno de amplitude maxima com Hann: |X| = 32768 * N / 4.
+     */
+    scale = 1.0f / (32768.0f * count / 4.0f);
+
+    for (i = 0; i < BARS; i++) {
+
+        float power = 0.0f;
+        float db;
+        int level;
+
+        for (t = 0; t < SPECTRUM_TAPS; t++) {
+
+            float c = goertzel_coeff[i][t];
+            float s1 = 0.0f;
+            float s2 = 0.0f;
+
+            for (j = 0; j < count; j++) {
+                float s0 = mono[j] + c * s1 - s2;
+                s2 = s1;
+                s1 = s0;
+            }
+
+            power += s1 * s1 + s2 * s2 - c * s1 * s2;
         }
 
-        average = (int)(sum / slice);
+        db = 10.0f * log10f(power / SPECTRUM_TAPS * scale * scale + 1e-12f);
 
-        while (level < BAR_ROWS && average >= thresholds[level])
-            level++;
+        level = (int)((db - SPECTRUM_FLOOR) * 100.0f / -SPECTRUM_FLOOR);
+
+        if (level < 0)
+            level = 0;
+
+        if (level > 100)
+            level = 100;
+
+        spectrum[i] = level;
 
         /*
-         * Sobe na hora, desce devagar.
+         * Tela de texto: sobe na hora, desce devagar.
          */
+        level = level * BAR_ROWS / 100;
+
         if (level > levels[i])
             levels[i] = level;
         else if (levels[i] > 0)
@@ -393,6 +483,7 @@ static TrackResult play_track(const char *dir, int index)
 
     memset(&t, 0, sizeof(t));
     memset(levels, 0, sizeof(levels));
+    memset(spectrum, 0, sizeof(spectrum));
 
     t.index = index;
     snprintf(t.name, sizeof(t.name), "%s", tracks[index]);
@@ -575,7 +666,7 @@ static TrackResult play_track(const char *dir, int index)
 
             current.samples += samples;
 
-            update_levels(pcm, samples, info.channels);
+            update_levels(pcm, samples, info.channels, info.hz);
         }
     }
 }
@@ -971,6 +1062,44 @@ void mp3player_draw(int full)
     scr_setXY(0, ROW_VOLUME);
 
     scr_printf("Volume [%s] %3d%%  (CIMA/BAIXO)   \n", bar, volume);
+}
+
+
+void mp3player_status(Mp3Status *s)
+{
+    const TrackState *t = &current;
+    int i;
+
+    memset(s, 0, sizeof(Mp3Status));
+
+    s->active = playing;
+    s->paused = paused;
+    s->shuffle = shuffle;
+    s->repeat = repeat;
+    s->volume = volume;
+
+    s->index = t->index;
+    s->count = track_count;
+
+    snprintf(s->name, sizeof(s->name), "%s", t->name);
+    snprintf(s->title, sizeof(s->title), "%s", t->id3.title);
+    snprintf(s->artist, sizeof(s->artist), "%s", t->id3.artist);
+    snprintf(s->album, sizeof(s->album), "%s", t->id3.album);
+    snprintf(s->track, sizeof(s->track), "%s", t->id3.track);
+
+    s->has_cover = t->id3.has_cover;
+    s->cover_size = t->id3.cover_size;
+    snprintf(s->cover_mime, sizeof(s->cover_mime), "%s", t->id3.cover_mime);
+
+    s->hz = t->hz;
+    s->channels = t->channels;
+    s->bitrate = t->bitrate;
+
+    s->elapsed = elapsed_seconds(t);
+    s->duration = t->duration;
+
+    for (i = 0; i < BARS && i < MP3_STATUS_BARS; i++)
+        s->spectrum[i] = playing && !paused ? spectrum[i] : 0;
 }
 
 
