@@ -6508,7 +6508,9 @@ static void draw_gui_browser(void)
     /*
      * Janelas por cima (a lista escurecida atras).
      */
-    if (files && keyboard_action != KEYBOARD_NONE)
+    if (current_screen == SCREEN_SETTINGS)
+        settings_draw_gui();
+    else if (files && keyboard_action != KEYBOARD_NONE)
         osk_draw_gui();
     else if (files && confirm_action != CONFIRM_NONE)
         gui_confirm();
@@ -6523,7 +6525,7 @@ static void draw_gui_browser(void)
  */
 static int gui_handles_screen(void)
 {
-    if (current_screen == SCREEN_PLAYER)
+    if (current_screen == SCREEN_PLAYER || current_screen == SCREEN_SETTINGS)
         return 1;
 
     if (current_screen == SCREEN_DEVICES)

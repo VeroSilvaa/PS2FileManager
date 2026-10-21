@@ -23,4 +23,9 @@ SettingsResult settings_update(unsigned int buttons);
 
 void settings_draw(void);
 
+/*
+ * Janela grafica (a cada quadro, por cima da lista de dispositivos).
+ */
+void settings_draw_gui(void);
+
 #endif

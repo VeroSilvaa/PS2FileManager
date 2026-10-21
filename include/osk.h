@@ -32,6 +32,11 @@ void osk_ascii_only(void);
 void osk_focus_digits(void);
 
 /*
+ * So numeros e ponto (enderecos IP), depois do osk_open.
+ */
+void osk_numeric_only(void);
+
+/*
  * buttons = botoes recem-pressionados (mascara PAD_* da libpad).
  */
 OskResult osk_update(unsigned int buttons);

@@ -25,9 +25,22 @@ enum {
     OSK_ACTION_PAGE = 0,
     OSK_ACTION_SPACE,
     OSK_ACTION_DELETE,
-    OSK_ACTION_DONE,
-    OSK_ACTIONS
+    OSK_ACTION_CLEAR,
+    OSK_ACTION_DONE
 };
+
+#define OSK_MAX_ACTIONS 4
+
+/*
+ * Acoes de cada modo (a linha de baixo).
+ */
+static const int text_actions[] = { OSK_ACTION_PAGE, OSK_ACTION_SPACE, OSK_ACTION_DELETE, OSK_ACTION_DONE };
+static const int numeric_actions[] = { OSK_ACTION_DELETE, OSK_ACTION_CLEAR, OSK_ACTION_DONE };
+
+/*
+ * Teclado numerico (enderecos IP).
+ */
+static const char *numeric_rows[OSK_ROWS] = { "123", "456", "789", ".0" };
 
 #define OSK_PAGE_ACCENTS  3
 
@@ -53,6 +66,25 @@ static int osk_page;
 static int osk_row;
 static int osk_col;
 static int osk_accents;     /* pagina de acentos disponivel */
+static int osk_numeric;     /* so numeros e ponto */
+
+
+static const char *page_row(int row)
+{
+    return osk_numeric ? numeric_rows[row] : osk_pages[osk_page][row];
+}
+
+
+static int action_count(void)
+{
+    return osk_numeric ? 3 : 4;
+}
+
+
+static int action_at(int col)
+{
+    return osk_numeric ? numeric_actions[col] : text_actions[col];
+}
 
 
 /* ------------------------------------------------------------
@@ -109,9 +141,9 @@ static void row_char(const char *row, int index, char *out)
 static int row_width(int row)
 {
     if (row == OSK_ACTION_ROW)
-        return OSK_ACTIONS;
+        return action_count();
 
-    return row_chars(osk_pages[osk_page][row]);
+    return row_chars(page_row(row));
 }
 
 
@@ -158,6 +190,9 @@ static void osk_next_page(void)
 {
     int pages = osk_accents ? OSK_PAGES : OSK_PAGE_ACCENTS;
 
+    if (osk_numeric)
+        return;
+
     osk_page = (osk_page + 1) % pages;
 
     if (osk_row != OSK_ACTION_ROW)
@@ -181,6 +216,15 @@ void osk_open(const char *title, const char *initial, int max_length)
     osk_row = 0;
     osk_col = 0;
     osk_accents = 1;
+    osk_numeric = 0;
+}
+
+
+void osk_numeric_only(void)
+{
+    osk_numeric = 1;
+    osk_row = 0;
+    osk_col = 0;
 }
 
 
@@ -235,10 +279,11 @@ OskResult osk_update(unsigned int buttons)
 
         if (osk_row == OSK_ACTION_ROW) {
 
-            switch (osk_col) {
+            switch (action_at(osk_col)) {
                 case OSK_ACTION_PAGE:   osk_next_page(); break;
                 case OSK_ACTION_SPACE:  osk_type(" "); break;
                 case OSK_ACTION_DELETE: osk_delete(); break;
+                case OSK_ACTION_CLEAR:  osk_length = 0; osk_buffer[0] = '\0'; break;
                 default:                return OSK_DONE;
             }
 
@@ -246,12 +291,12 @@ OskResult osk_update(unsigned int buttons)
 
             char key[8];
 
-            row_char(osk_pages[osk_page][osk_row], osk_col, key);
+            row_char(page_row(osk_row), osk_col, key);
             osk_type(key);
         }
     }
 
-    if (buttons & PAD_R1)
+    if ((buttons & PAD_R1) && !osk_numeric)
         osk_type(" ");
 
     if (buttons & PAD_SQUARE)
@@ -291,7 +336,7 @@ void osk_draw(void)
 
     for (r = 0; r < OSK_ROWS; r++) {
 
-        const char *row = osk_pages[osk_page][r];
+        const char *row = page_row(r);
 
         scr_printf("   ");
 
@@ -350,9 +395,16 @@ static void draw_key(float x, float y, float w, const char *label, int focused, 
 
 void osk_draw_gui(void)
 {
-    static const char *action_names[OSK_ACTIONS] = { "", "Espaço", "Apagar", "OK" };
+    static const char *action_names[] = { "", "Espaço", "Apagar", "Limpar", "OK" };
     float grid_w = 10 * KEY_W + 9 * KEY_GAP;
     float grid_x = OSK_X + (OSK_W - grid_w) / 2;
+
+    /*
+     * Numerico: 3 teclas largas por linha, centradas.
+     */
+    float key_w = osk_numeric ? 96 : KEY_W;
+    float keys_w = osk_numeric ? 3 * key_w + 2 * KEY_GAP : grid_w;
+    float keys_x = OSK_X + (OSK_W - keys_w) / 2;
     float y = gui_window(OSK_X, OSK_Y, OSK_W, OSK_H, osk_title);
     char line[160];
     char key[8];
@@ -394,16 +446,23 @@ void osk_draw_gui(void)
      */
     x = grid_x;
 
-    for (p = 0; p < pages; p++) {
+    if (osk_numeric) {
 
-        float w = gfx_text_width(osk_page_names[p]) + 14;
+        gfx_text(x, y, "Números (endereço IP)", UI_TEXT_OFF);
 
-        if (p == osk_page)
-            gfx_rect(x, y + 1, w, 18, UI_SEL_DIM);
+    } else {
 
-        gfx_text(x + 7, y, osk_page_names[p], p == osk_page ? UI_TEXT : UI_TEXT_OFF);
+        for (p = 0; p < pages; p++) {
 
-        x += w + 4;
+            float w = gfx_text_width(osk_page_names[p]) + 14;
+
+            if (p == osk_page)
+                gfx_rect(x, y + 1, w, 18, UI_SEL_DIM);
+
+            gfx_text(x + 7, y, osk_page_names[p], p == osk_page ? UI_TEXT : UI_TEXT_OFF);
+
+            x += w + 4;
+        }
     }
 
     y += 26;
@@ -414,13 +473,13 @@ void osk_draw_gui(void)
      */
     for (r = 0; r < OSK_ROWS; r++) {
 
-        const char *row = osk_pages[osk_page][r];
+        const char *row = page_row(r);
 
         for (c = 0; c < row_chars(row); c++) {
 
             row_char(row, c, key);
 
-            draw_key(grid_x + c * (KEY_W + KEY_GAP), y + r * (KEY_H + KEY_GAP), KEY_W, key,
+            draw_key(keys_x + c * (key_w + KEY_GAP), y + r * (KEY_H + KEY_GAP), key_w, key,
                      osk_row == r && osk_col == c, 0);
         }
     }
@@ -429,22 +488,24 @@ void osk_draw_gui(void)
 
 
     /*
-     * Acoes: a primeira mostra a proxima pagina.
+     * Acoes: no teclado de texto a primeira mostra a proxima pagina.
      */
     {
-        float action_w = (grid_w - (OSK_ACTIONS - 1) * KEY_GAP) / OSK_ACTIONS;
+        int count = action_count();
+        float action_w = (keys_w - (count - 1) * KEY_GAP) / count;
 
-        for (c = 0; c < OSK_ACTIONS; c++) {
+        for (c = 0; c < count; c++) {
 
-            const char *label = action_names[c];
+            int action = action_at(c);
+            const char *label = action_names[action];
 
-            if (c == OSK_ACTION_PAGE) {
+            if (action == OSK_ACTION_PAGE) {
                 snprintf(line, sizeof(line), "Teclas: %s", osk_page_names[(osk_page + 1) % pages]);
                 label = line;
             }
 
-            draw_key(grid_x + c * (action_w + KEY_GAP), y, action_w, label,
-                     osk_row == OSK_ACTION_ROW && osk_col == c, c == OSK_ACTION_DONE);
+            draw_key(keys_x + c * (action_w + KEY_GAP), y, action_w, label,
+                     osk_row == OSK_ACTION_ROW && osk_col == c, action == OSK_ACTION_DONE);
         }
     }
 
@@ -458,8 +519,11 @@ void osk_draw_gui(void)
 
     x += gfx_button_hint(x, y, GFX_BTN_CROSS, "Digitar");
     x += gfx_button_hint(x, y, GFX_BTN_SQUARE, "Apagar");
-    x += gfx_button_hint(x, y, GFX_BTN_R1, "Espaço");
-    gfx_button_hint(x, y, GFX_BTN_TRIANGLE, "Teclas");
+
+    if (!osk_numeric) {
+        x += gfx_button_hint(x, y, GFX_BTN_R1, "Espaço");
+        gfx_button_hint(x, y, GFX_BTN_TRIANGLE, "Teclas");
+    }
 
     x = grid_x;
     y += 24;

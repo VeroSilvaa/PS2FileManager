@@ -6,8 +6,11 @@
 #include <libpad.h>
 
 #include "config.h"
+#include "network.h"
 #include "osk.h"
 #include "settings.h"
+#include "smb.h"
+#include "ui.h"
 
 typedef enum {
     FIELD_MODE = 0,
@@ -32,15 +35,15 @@ typedef struct {
 static const SettingsField fields[] = {
     { "Modo de IP", FIELD_MODE, 0, 0 },
     FIELD("IP do PS2", FIELD_IP, ip),
-    FIELD("Mascara", FIELD_IP, netmask),
+    FIELD("Máscara", FIELD_IP, netmask),
     FIELD("Gateway", FIELD_IP, gateway),
     FIELD("DNS", FIELD_IP, dns),
     FIELD("Servidor SMB (IP)", FIELD_SERVER, smb_server),
     FIELD("Compartilhamento", FIELD_TEXT, smb_share),
-    FIELD("Usuario", FIELD_TEXT, smb_user),
+    FIELD("Usuário", FIELD_TEXT, smb_user),
     FIELD("Senha", FIELD_PASSWORD, smb_password),
     { "Salvar", FIELD_SAVE, 0, 0 },
-    { "Voltar sem salvar", FIELD_CANCEL, 0, 0 }
+    { "Cancelar", FIELD_CANCEL, 0, 0 }
 };
 
 #define FIELD_COUNT ((int)(sizeof(fields) / sizeof(fields[0])))
@@ -139,7 +142,7 @@ static SettingsResult settings_select(void)
             osk_ascii_only();
 
             if (field->type == FIELD_IP || field->type == FIELD_SERVER)
-                osk_focus_digits();
+                osk_numeric_only();
 
             editing = cursor;
             message[0] = '\0';
@@ -169,11 +172,33 @@ SettingsResult settings_update(unsigned int buttons)
     }
 
 
-    if (buttons & PAD_UP)
-        cursor = cursor > 0 ? cursor - 1 : FIELD_COUNT - 1;
+    /*
+     * Salvar e Cancelar ficam lado a lado: CIMA/BAIXO tratam os dois
+     * como uma linha so; ESQUERDA/DIREITA andam entre eles.
+     */
+    if (buttons & PAD_UP) {
+        if (fields[cursor].type == FIELD_SAVE || fields[cursor].type == FIELD_CANCEL)
+            cursor = FIELD_COUNT - 3;
+        else
+            cursor = cursor > 0 ? cursor - 1 : FIELD_COUNT - 2;
+    }
 
-    if (buttons & PAD_DOWN)
-        cursor = cursor < FIELD_COUNT - 1 ? cursor + 1 : 0;
+    if (buttons & PAD_DOWN) {
+        if (fields[cursor].type == FIELD_SAVE || fields[cursor].type == FIELD_CANCEL)
+            cursor = 0;
+        else
+            cursor++;
+    }
+
+    if (buttons & (PAD_LEFT | PAD_RIGHT)) {
+
+        if (fields[cursor].type == FIELD_MODE)
+            edit.dhcp = !edit.dhcp;
+        else if (fields[cursor].type == FIELD_SAVE)
+            cursor++;
+        else if (fields[cursor].type == FIELD_CANCEL)
+            cursor--;
+    }
 
     if (buttons & PAD_CROSS)
         return settings_select();
@@ -253,4 +278,148 @@ void settings_draw(void)
 
     scr_printf("X editar/alternar | START salvar | O voltar\n");
     scr_printf("SMB: servidor pelo IP, protocolo SMB1 (NT1).\n");
+}
+
+
+/*
+ * Interface grafica: janela por cima da lista de dispositivos; o
+ * teclado abre por cima dela.
+ */
+#define SET_X       72
+#define SET_Y       34
+#define SET_W       496
+#define SET_H       384
+#define SET_ROW_H   24
+#define SET_LABEL_W 170
+
+void settings_draw_gui(void)
+{
+    const NetworkInfo *net = network_get_info();
+    const SMBInfo *smb = smb_get_info();
+    float y = gui_window(SET_X, SET_Y, SET_W, SET_H, "Configurações de rede e SMB");
+    float x = SET_X + 16;
+    float w = SET_W - 32;
+    char line[128];
+    int i;
+
+
+    for (i = 0; i < FIELD_COUNT && fields[i].type != FIELD_SAVE; i++) {
+
+        const SettingsField *field = &fields[i];
+        float row = y + i * SET_ROW_H;
+        int off = field->type == FIELD_IP && edit.dhcp;
+        const char *value = field_text(i);
+        gfx_color color = off ? UI_TEXT_OFF : UI_TEXT;
+
+        if (i == cursor && editing < 0)
+            gui_selection(x - 6, row - 1, w + 12, SET_ROW_H - 2, 1);
+
+        gfx_text(x, row, field->label, off ? UI_TEXT_OFF : UI_TEXT2);
+
+        switch (field->type) {
+
+            case FIELD_MODE:
+                snprintf(line, sizeof(line), "%s", edit.dhcp ? "DHCP (automático)" : "Estático");
+                gfx_text(x + SET_LABEL_W, row, line, UI_TEXT);
+
+                /*
+                 * Setas: ESQUERDA/DIREITA alternam.
+                 */
+                if (i == cursor) {
+                    gfx_triangle(x + w - 34, row + 9, x + w - 27, row + 4, x + w - 27, row + 14, UI_TEXT);
+                    gfx_triangle(x + w - 4, row + 9, x + w - 11, row + 4, x + w - 11, row + 14, UI_TEXT);
+                }
+                break;
+
+            case FIELD_IP:
+                gfx_text(x + SET_LABEL_W, row, off ? "(automático)" : value, color);
+                break;
+
+            case FIELD_PASSWORD:
+                if (value[0]) {
+                    int n = strlen(value) < 12 ? strlen(value) : 12;
+                    int k;
+
+                    for (k = 0; k < n; k++)
+                        gfx_rect(x + SET_LABEL_W + 2 + k * 11, row + 6, 7, 7, UI_TEXT);
+                } else {
+                    gfx_text(x + SET_LABEL_W, row, "(sem senha)", UI_TEXT_OFF);
+                }
+                break;
+
+            default:
+                gfx_text_fit(x + SET_LABEL_W, row, w - SET_LABEL_W, value, color);
+                break;
+        }
+    }
+
+    y += i * SET_ROW_H + 6;
+
+
+    /*
+     * Salvar / Cancelar.
+     */
+    for (; i < FIELD_COUNT; i++) {
+
+        float bw = (w - 12) / 2;
+        float bx = x + (fields[i].type == FIELD_CANCEL ? bw + 12 : 0);
+        int focused = i == cursor && editing < 0;
+
+        if (focused)
+            gui_selection(bx, y, bw, 28, 1);
+        else
+            gfx_rect(bx, y, bw, 28, UI_PANEL);
+
+        gfx_border(bx, y, bw, 28, 1, focused ? UI_SEL_BOTTOM : UI_BORDER);
+
+        gfx_text(bx + (bw - gfx_text_width(fields[i].label)) / 2, y + 4, fields[i].label,
+                 focused ? UI_TEXT : fields[i].type == FIELD_SAVE ? UI_OK : UI_TEXT2);
+    }
+
+    y += 38;
+
+
+    /*
+     * Aviso (vermelho) ou situacao atual da rede e do SMB.
+     */
+    if (message[0]) {
+
+        gfx_text_fit(x, y, w, message, UI_ERROR);
+
+    } else {
+
+        if (net->initialized)
+            snprintf(line, sizeof(line), "Em uso: IP %s (%s)", net->ip,
+                     net->mode == NETWORK_DHCP ? "DHCP" : "estático");
+        else
+            snprintf(line, sizeof(line), "Rede ainda não iniciada (abre ao entrar no SMB).");
+
+        gfx_text_fit(x, y, w, line, UI_TEXT2);
+    }
+
+    y += 22;
+
+    if (smb->connected)
+        snprintf(line, sizeof(line), "SMB conectado: %s/%s (usuário %s)", smb->server, smb->share, smb->user);
+    else
+        snprintf(line, sizeof(line), "SMB desconectado. Arquivo: %s",
+                 config_path()[0] ? config_path() : "(ainda não gravado)");
+
+    gfx_text_fit(x, y, w, line, smb->connected ? UI_OK : UI_TEXT_OFF);
+
+    y += 30;
+
+
+    {
+        float bx = x;
+
+        bx += gfx_button_hint(bx, y, GFX_BTN_CROSS, "Editar");
+        bx += gfx_button_hint(bx, y, GFX_BTN_START, "Salvar");
+        bx += gfx_button_hint(bx, y, GFX_BTN_CIRCLE, "Voltar");
+        gfx_text(bx, y - 1, "SMB1 (NT1), servidor pelo IP", UI_TEXT_OFF);
+    }
+
+
+    if (editing >= 0)
+        osk_draw_gui();
 }
