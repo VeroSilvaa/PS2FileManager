@@ -456,8 +456,19 @@ static TrackResult play_track(const char *dir, int index)
         }
 
         if (request_pause) {
+
             request_pause = 0;
             paused = !paused;
+
+            /*
+             * Sem dados novos o audsrv repete o que ficou no buffer
+             * (a musica "trepida"): para a saida na pausa e
+             * reconfigura o formato ao continuar.
+             */
+            if (paused)
+                audio_stop();
+            else if (current.hz)
+                audio_format(current.hz, current.channels);
         }
 
         if (request_volume) {
