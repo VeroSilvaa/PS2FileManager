@@ -99,6 +99,14 @@ void fileio_set_progress(
 );
 
 /*
+ * Conferencia byte a byte (relendo o destino) depois de cada
+ * arquivo. Padrao 1. O mover sempre usa 1.
+ */
+void fileio_set_verify(
+    int verify
+);
+
+/*
  * Soma tamanho e quantidade de arquivos (recursivo).
  */
 int fileio_measure(

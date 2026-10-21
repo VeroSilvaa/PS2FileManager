@@ -162,7 +162,7 @@ typedef enum {
     FORMAT_ACT_CANCEL
 } FormatAction;
 
-#define FORMAT_MAX_OPTIONS  6
+#define FORMAT_MAX_OPTIONS  8
 
 static FormatStep format_step = FORMAT_NONE;
 static int format_cursor = 0;
@@ -178,6 +178,12 @@ static FormatAction format_chosen;
 static unsigned int format_total_mb;
 static int format_formatted;
 static int format_partitions;
+
+/*
+ * HDD em MBR/GPT (exFAT/FAT32): formatado pelo fatfmt, como o USB
+ * (format_disks[0] = disco "ata").
+ */
+static int format_hdd_fat;
 
 /*
  * USB (discos inteiros do BDM)
@@ -196,8 +202,15 @@ typedef enum {
     CONFIRM_NONE = 0,
     CONFIRM_DELETE,
     CONFIRM_MOVE,
-    CONFIRM_RENAME      /* so para arquivo de sistema do save */
+    CONFIRM_RENAME,     /* so para arquivo de sistema do save */
+    CONFIRM_PASTE       /* colar copia: conferir SIM/NAO */
 } ConfirmAction;
+
+/*
+ * Conferencia byte a byte no Colar (copia). Comeca em SIM a cada
+ * colagem; o mover sempre confere.
+ */
+static int paste_verify = 1;
 
 static ConfirmAction confirm_action = CONFIRM_NONE;
 static int operation_menu_cursor = 0;
@@ -666,6 +679,48 @@ static int is_partition_list(void)
 }
 
 
+/*
+ * HDD em MBR/GPT + exFAT/FAT32: o bdmfs_fatfs monta a particao
+ * como "ata0:" (de forma assincrona, logo depois do ata_bd).
+ */
+#define HDD_FAT_ROOT "ata0:/"
+
+static int hdd_fat_mounted(void)
+{
+    clock_t start = clock();
+    DIR *dir;
+
+    do {
+        dir = opendir(HDD_FAT_ROOT);
+
+        if (dir) {
+            closedir(dir);
+            return 1;
+        }
+
+    } while (clock() - start < CLOCKS_PER_SEC * 3);
+
+    return 0;
+}
+
+
+static void open_hdd_fat(void)
+{
+    if (!hdd_fat_mounted()) {
+
+        set_status("HDD em MBR/GPT sem exFAT/FAT32 montavel: R1 para formatar.");
+
+        return;
+    }
+
+    fm_init(&file_manager, HDD_FAT_ROOT);
+
+    current_screen = SCREEN_FILES;
+
+    set_status("Aberto: " HDD_FAT_ROOT " (HDD exFAT/FAT32)");
+}
+
+
 static void open_hdd(void)
 {
     scr_clear();
@@ -676,6 +731,17 @@ static void open_hdd(void)
 
 
     if (hdd_init() < 0) {
+
+        /*
+         * HDD em MBR/GPT (exFAT/FAT32, como o OPL): pelo BDM.
+         */
+        if (hdd_layout_table() == FATFMT_TABLE_MBR ||
+            hdd_layout_table() == FATFMT_TABLE_GPT) {
+
+            open_hdd_fat();
+
+            return;
+        }
 
         snprintf(
             status_message,
@@ -1468,7 +1534,9 @@ static void run_paste_items(void)
         snprintf(
             status_message,
             sizeof(status_message),
-            "COPIA VERIFICADA: %d item(ns)",
+            paste_verify
+                ? "COPIA VERIFICADA: %d item(ns)"
+                : "COPIA CONCLUIDA (sem conferencia): %d item(ns)",
             done
         );
     }
@@ -1754,7 +1822,13 @@ static void run_paste(void)
     );
 
 
-    progress_total = total_bytes * 2ULL;
+    /*
+     * Mover sempre confere (a origem so e apagada depois).
+     */
+    if (clipboard.mode == CLIPBOARD_MOVE)
+        paste_verify = 1;
+
+    progress_total = paste_verify ? total_bytes * 2ULL : total_bytes;
     progress_done = 0;
     progress_files_total = total_files;
     progress_file_index = 0;
@@ -1763,9 +1837,11 @@ static void run_paste(void)
 
 
     fileio_set_progress(paste_progress);
+    fileio_set_verify(paste_verify);
 
     run_paste_items();
 
+    fileio_set_verify(1);
     fileio_set_progress(NULL);
 
     /*
@@ -1821,7 +1897,12 @@ static void paste_clipboard(void)
     }
 
 
-    run_paste();
+    /*
+     * Copia: tela rapida com a escolha da conferencia.
+     */
+    paste_verify = 1;
+
+    confirm_action = CONFIRM_PASTE;
 }
 
 /* ============================================================
@@ -3314,6 +3395,12 @@ static int confirm_has_system(void)
     if (confirm_action == CONFIRM_RENAME)
         return 1;
 
+    /*
+     * Copiar nao apaga nada: X confirma sempre.
+     */
+    if (confirm_action == CONFIRM_PASTE)
+        return 0;
+
     if (confirm_action == CONFIRM_DELETE)
         return selection_has_system();
 
@@ -3334,6 +3421,15 @@ static void update_confirm(void)
         set_status(
             "Operacao cancelada."
         );
+
+        return;
+    }
+
+
+    if (confirm_action == CONFIRM_PASTE &&
+        pressed(PAD_SQUARE)) {
+
+        paste_verify = !paste_verify;
 
         return;
     }
@@ -3407,6 +3503,31 @@ static void draw_confirm(void)
     scr_printf(
         "===============\n\n"
     );
+
+
+    if (confirm_action == CONFIRM_PASTE) {
+
+        scr_printf(
+            "COLAR %d ITEM(NS) EM:\n  %s\n\n",
+            clipboard.count,
+            file_manager.current_path
+        );
+
+        for (i = 0; i < clipboard.count && i < 10; i++)
+            scr_printf("  %s\n", path_filename(clipboard.paths[i]));
+
+        if (clipboard.count > 10)
+            scr_printf("  ... e mais %d\n", clipboard.count - 10);
+
+        scr_printf(
+            "\nConferir copia (relendo o destino): %s\n",
+            paste_verify ? "SIM" : "NAO (mais rapido)"
+        );
+
+        scr_printf("\nX colar | QUADRADO conferir sim/nao | O cancelar\n");
+
+        return;
+    }
 
 
     if (confirm_action == CONFIRM_RENAME) {
@@ -3526,7 +3647,7 @@ static void draw_confirm(void)
         );
 
         scr_printf(
-            "verificada byte a byte.\n"
+            "verificada byte a byte (sempre, no mover).\n"
         );
     }
 
@@ -3626,13 +3747,17 @@ static void format_build_menu(void)
     format_option_count = 0;
     format_cursor = 0;
 
-    if (!format_usb) {
+    if (!format_usb && !format_hdd_fat) {
 
+        /*
+         * HDD APA (ou vazio): APA, ou tabela para exFAT/FAT32 (OPL).
+         */
         format_add_option("APA (padrao PS2)", FORMAT_ACT_APA);
-        format_add_option("FAT32 [em breve]", FORMAT_ACT_SOON);
-        format_add_option("exFAT [em breve]", FORMAT_ACT_SOON);
+        format_add_option("Criar tabela MBR (exFAT/FAT32)", FORMAT_ACT_TABLE_MBR);
+        format_add_option("Criar tabela GPT (exFAT/FAT32)", FORMAT_ACT_TABLE_GPT);
 
-    } else if (format_disks[format_disk].table == FATFMT_TABLE_NONE) {
+    } else if (format_disks[format_disk].table == FATFMT_TABLE_NONE ||
+               format_disks[format_disk].table == FATFMT_TABLE_EMPTY) {
 
         format_add_option("Criar tabela MBR", FORMAT_ACT_TABLE_MBR);
         format_add_option("Criar tabela GPT", FORMAT_ACT_TABLE_GPT);
@@ -3644,6 +3769,12 @@ static void format_build_menu(void)
         format_add_option("Recriar tabela MBR (apaga tudo)", FORMAT_ACT_TABLE_MBR);
         format_add_option("Recriar tabela GPT (apaga tudo)", FORMAT_ACT_TABLE_GPT);
     }
+
+    /*
+     * HDD em MBR/GPT: voltar ao padrao do PS2.
+     */
+    if (format_hdd_fat)
+        format_add_option("APA (padrao PS2, apaga tudo)", FORMAT_ACT_APA);
 
     format_add_option("Cancelar", FORMAT_ACT_CANCEL);
 }
@@ -3677,6 +3808,7 @@ static void start_format_usb(void)
     }
 
     format_usb = 1;
+    format_hdd_fat = 0;
     format_disk = 0;
     format_cursor = 0;
     format_step = FORMAT_DISKS;
@@ -3708,17 +3840,52 @@ static void start_format(void)
 
 
     /*
-     * HDD: precisa da pilha ATAD/APA carregada (tambem com o
-     * disco sem formato).
+     * HDD: APA/vazio carrega o driver APA; MBR/GPT fica so no BDM
+     * (exFAT/FAT32) e e formatado pelo fatfmt.
      */
+    format_usb = 0;
+    format_hdd_fat = 0;
+
     if (hdd_init() < 0) {
 
-        snprintf(
-            status_message,
-            sizeof(status_message),
-            "HDD indisponivel: %s",
-            hdd_error()
+        format_hdd_fat =
+            hdd_layout_table() == FATFMT_TABLE_MBR ||
+            hdd_layout_table() == FATFMT_TABLE_GPT;
+
+        if (!format_hdd_fat) {
+
+            snprintf(
+                status_message,
+                sizeof(status_message),
+                "HDD indisponivel: %s",
+                hdd_error()
+            );
+
+            return;
+        }
+    }
+
+    if (usbfmt_hdd_disk(&format_disks[0]) < 0) {
+
+        set_status("HDD nao encontrado no BDM (ata_bd/fatfmt).");
+
+        return;
+    }
+
+    format_disk_count = 1;
+    format_disk = 0;
+
+    if (format_hdd_fat) {
+
+        printf(
+            "FM FORMAT: HDD %u MB, %s, %s\n",
+            usbfmt_size_mb(&format_disks[0]),
+            usbfmt_table_name(format_disks[0].table),
+            usbfmt_fs_name(format_disks[0].fs)
         );
+
+        format_build_menu();
+        format_step = FORMAT_MENU;
 
         return;
     }
@@ -3828,13 +3995,20 @@ static const char *format_action_text(FormatAction action)
 
 
 /*
- * Pendrive: tabela (uma particao no disco inteiro) ou formatacao
- * da 1a particao. O BDM desmonta e monta de novo (fatfmt.irx).
+ * Pendrive ou HDD (disco "ata"): tabela (uma particao no disco
+ * inteiro) ou formatacao da 1a particao. O BDM desmonta e monta de
+ * novo (fatfmt.irx).
  */
 static void run_format_usb(void)
 {
     const fatfmt_disk_t *disk = &format_disks[format_disk];
+    int is_table;
     int result;
+
+
+    is_table =
+        format_chosen == FORMAT_ACT_TABLE_MBR ||
+        format_chosen == FORMAT_ACT_TABLE_GPT;
 
 
     scr_clear();
@@ -3847,18 +4021,32 @@ static void run_format_usb(void)
         disk->dev_nr,
         format_action_text(format_chosen)
     );
-    scr_printf("Aguarde. Nao remova o pendrive.\n");
+    scr_printf(format_usb ? "Aguarde. Nao remova o pendrive.\n" : "Aguarde. Nao desligue o console.\n");
 
 
     /*
-     * O clipboard pode apontar para o pendrive (usbN:).
+     * O clipboard pode apontar para o disco (usbN:, ata0:, pfsN:).
      */
     if (clipboard.count > 0 &&
-        strncmp(clipboard.paths[0], USB_PREFIX, strlen(USB_PREFIX)) == 0)
+        (format_usb
+            ? strncmp(clipboard.paths[0], USB_PREFIX, strlen(USB_PREFIX)) == 0
+            : (strncmp(clipboard.paths[0], "ata", 3) == 0 ||
+               strncmp(clipboard.paths[0], "pfs", 3) == 0 ||
+               strncmp(clipboard.paths[0], "hdd", 3) == 0)))
         clipboard_clear(&clipboard);
 
 
-    if (format_chosen == FORMAT_ACT_TABLE_MBR || format_chosen == FORMAT_ACT_TABLE_GPT)
+    /*
+     * HDD APA com o driver carregado: desmonta as particoes antes
+     * de trocar o disco por MBR/GPT.
+     */
+    if (!format_usb && !format_hdd_fat) {
+        hdd_sync_all();
+        hdd_unmount_all();
+    }
+
+
+    if (is_table)
         result = usbfmt_table(
             disk,
             format_chosen == FORMAT_ACT_TABLE_GPT ? FATFMT_TABLE_GPT : FATFMT_TABLE_MBR
@@ -3870,11 +4058,28 @@ static void run_format_usb(void)
         );
 
 
-    scr_printf("\nEsperando o pendrive montar de novo...\n");
+    if (format_usb) {
 
-    usb_wait_mount();
+        scr_printf("\nEsperando o pendrive montar de novo...\n");
 
-    refresh_devices();
+        usb_wait_mount();
+
+        refresh_devices();
+
+    } else {
+
+        /*
+         * HDD agora e MBR/GPT: o driver APA deixa de ser usado e o
+         * disco abre como ata0:.
+         */
+        if (result == 0 && is_table)
+            hdd_set_layout(format_chosen == FORMAT_ACT_TABLE_GPT ? FATFMT_TABLE_GPT : FATFMT_TABLE_MBR);
+
+        if (result == 0 && !is_table) {
+            scr_printf("\nEsperando o HDD montar...\n");
+            hdd_fat_mounted();
+        }
+    }
 
 
     if (result < 0) {
@@ -3905,10 +4110,59 @@ static void run_format_usb(void)
         snprintf(
             status_message,
             sizeof(status_message),
-            "Pendrive formatado em %s.",
+            "%s formatado em %s.",
+            format_usb ? "Pendrive" : "HDD",
             format_chosen == FORMAT_ACT_EXFAT ? "exFAT" : "FAT32"
         );
     }
+}
+
+
+/*
+ * HDD -> APA. Se o disco esta em MBR/GPT, as tabelas sao apagadas
+ * primeiro (fatfmt WIPE): o disco fica "vazio" e so entao o driver
+ * APA e carregado.
+ */
+static void run_format_hdd_apa(void)
+{
+    int result;
+
+    if (format_hdd_fat) {
+
+        if (clipboard.count > 0 && strncmp(clipboard.paths[0], "ata", 3) == 0)
+            clipboard_clear(&clipboard);
+
+        result = usbfmt_wipe(&format_disks[0]);
+
+        if (result < 0) {
+
+            snprintf(
+                status_message,
+                sizeof(status_message),
+                "ERRO ao apagar tabelas do HDD: %s (%d)",
+                usbfmt_error_text(result),
+                result
+            );
+
+            return;
+        }
+
+        hdd_set_layout(FATFMT_TABLE_EMPTY);
+
+        if (hdd_init() < 0) {
+
+            snprintf(
+                status_message,
+                sizeof(status_message),
+                "ERRO ao carregar o driver APA: %s",
+                hdd_error()
+            );
+
+            return;
+        }
+    }
+
+    run_format_apa();
 }
 
 
@@ -3989,10 +4243,10 @@ static void update_format(void)
 
                 format_step = FORMAT_NONE;
 
-                if (format_usb)
-                    run_format_usb();
+                if (format_chosen == FORMAT_ACT_APA)
+                    run_format_hdd_apa();
                 else
-                    run_format_apa();
+                    run_format_usb();
             }
 
             break;
@@ -4045,7 +4299,10 @@ static void draw_format_usb(void)
 
     disk = &format_disks[format_disk];
 
-    scr_printf("FORMATAR: pendrive %s%u\n\n", disk->name, disk->dev_nr);
+    if (format_usb)
+        scr_printf("FORMATAR: pendrive %s%u\n\n", disk->name, disk->dev_nr);
+    else
+        scr_printf("FORMATAR: HDD interno (%s%u)\n\n", disk->name, disk->dev_nr);
 
     scr_printf("Capacidade : %u MB\n", usbfmt_size_mb(disk));
     scr_printf("Tabela     : %s\n", usbfmt_table_name(disk->table));
@@ -4070,8 +4327,13 @@ static void draw_format_usb(void)
 
     scr_printf("ACAO: %s\n\n", format_action_text(format_chosen));
 
-    if (format_chosen == FORMAT_ACT_TABLE_MBR || format_chosen == FORMAT_ACT_TABLE_GPT) {
-        scr_printf("ATENCAO: TODOS OS DADOS DO PENDRIVE SERAO\n");
+    if (format_chosen == FORMAT_ACT_APA) {
+        scr_printf("ATENCAO: TODOS OS DADOS DO HDD SERAO APAGADOS.\n");
+        scr_printf("As tabelas MBR/GPT sao zeradas e o HDD volta ao\n");
+        scr_printf("padrao do PS2 (APA + __net, __system, __sysconf,\n");
+        scr_printf("__common).\n\n");
+    } else if (format_chosen == FORMAT_ACT_TABLE_MBR || format_chosen == FORMAT_ACT_TABLE_GPT) {
+        scr_printf("ATENCAO: TODOS OS DADOS DO %s SERAO\n", format_usb ? "PENDRIVE" : "HDD (APA, JOGOS)");
         scr_printf("APAGADOS. Sera criada uma particao no disco\n");
         scr_printf("inteiro; depois formate em FAT32 ou exFAT.\n\n");
     } else {
@@ -4096,7 +4358,12 @@ static void draw_format(void)
     int i;
 
 
-    if (format_usb) {
+    /*
+     * Pendrive, HDD em MBR/GPT, ou HDD APA indo para MBR/GPT.
+     */
+    if (format_usb ||
+        format_hdd_fat ||
+        (format_step != FORMAT_MENU && format_chosen != FORMAT_ACT_APA)) {
 
         draw_format_usb();
 
@@ -4575,10 +4842,21 @@ static void draw_device_screen(void)
         scr_printf("  ");
 
 
-    scr_printf(
-        "HDD interno (hdd0:) [%d montada(s)]\n",
-        hdd_mounted_count()
-    );
+    if (hdd_layout_table() == FATFMT_TABLE_MBR ||
+        hdd_layout_table() == FATFMT_TABLE_GPT) {
+
+        scr_printf(
+            "HDD interno (ata0:) [%s exFAT/FAT32]\n",
+            usbfmt_table_name(hdd_layout_table())
+        );
+
+    } else {
+
+        scr_printf(
+            "HDD interno (hdd0:) [%d montada(s)]\n",
+            hdd_mounted_count()
+        );
+    }
 
     for (i = 0; i < USB_UNITS; i++) {
 

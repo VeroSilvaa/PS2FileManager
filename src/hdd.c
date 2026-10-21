@@ -163,10 +163,39 @@ int hdd_layout_table(void)
 }
 
 
+void hdd_set_layout(int table)
+{
+    hdd_table = table;
+
+    hdd_not_apa =
+        (table == FATFMT_TABLE_APA || table == FATFMT_TABLE_EMPTY)
+            ? 0
+            : (table == FATFMT_TABLE_NONE ? 99 : table);
+
+    printf("HDD: tabela agora %s\n", usbfmt_table_name(table));
+}
+
+
+int hdd_stack_loaded(void)
+{
+    return atad_loaded;
+}
+
+
 int hdd_init(void)
 {
     int result;
     int i;
+
+
+    /*
+     * Disco nao-APA (visto agora ou formatado em MBR/GPT nesta
+     * sessao): o driver APA nao e usado, mesmo se ja carregado.
+     */
+    if (hdd_not_apa) {
+        hdd_set_error("HDD nao e APA (MBR/GPT/exFAT?): driver APA nao carregado", hdd_not_apa);
+        return -5;
+    }
 
 
     if (hdd_ready)
@@ -178,15 +207,6 @@ int hdd_init(void)
     for (i = 0; i < HDD_SLOTS; i++) {
         memset(&slots[i], 0, sizeof(HddSlot));
         snprintf(slots[i].point, sizeof(slots[i].point), "pfs%d:", i);
-    }
-
-
-    /*
-     * Disco ja visto como nao-APA: o driver APA nunca e carregado.
-     */
-    if (hdd_not_apa) {
-        hdd_set_error("HDD nao e APA (MBR/GPT/exFAT?): driver APA nao carregado", hdd_not_apa);
-        return -5;
     }
 
 

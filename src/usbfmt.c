@@ -90,7 +90,9 @@ static int usbfmt_request(int cmd, const fatfmt_disk_t *disk, unsigned int value
 
     printf(
         "FM USBFMT: %s %s%u valor %u -> %d\n",
-        cmd == FATFMT_DEVCTL_TABLE ? "tabela" : "formatar",
+        cmd == FATFMT_DEVCTL_TABLE
+            ? "tabela"
+            : cmd == FATFMT_DEVCTL_WIPE ? "apagar" : "formatar",
         disk->name,
         disk->dev_nr,
         value,
@@ -110,6 +112,12 @@ int usbfmt_table(const fatfmt_disk_t *disk, unsigned int table)
 int usbfmt_format(const fatfmt_disk_t *disk, unsigned int fs)
 {
     return usbfmt_request(FATFMT_DEVCTL_FORMAT, disk, fs);
+}
+
+
+int usbfmt_wipe(const fatfmt_disk_t *disk)
+{
+    return usbfmt_request(FATFMT_DEVCTL_WIPE, disk, 0);
 }
 
 
@@ -163,8 +171,6 @@ const char *usbfmt_error_text(int code)
     if (code == FATFMT_ERR_IO)
         return "erro de leitura/gravacao";
 
-    if (code == FATFMT_ERR_READ_ONLY)
-        return "HDD: formatar FAT ainda nao liberado";
 
     if (code == FATFMT_ERR_FATFS + 14)
         return "FatFs: tamanho invalido para este formato";

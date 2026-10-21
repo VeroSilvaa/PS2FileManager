@@ -43,6 +43,17 @@ static unsigned int fmio_file_total = 0;
 static unsigned int fmio_file_done = 0;
 
 
+/*
+ * Conferencia byte a byte depois de cada arquivo copiado.
+ */
+static int fmio_verify = 1;
+
+void fileio_set_verify(int verify)
+{
+    fmio_verify = verify ? 1 : 0;
+}
+
+
 void fileio_set_progress(
     FileProgressFn fn)
 {
@@ -736,26 +747,30 @@ static int fmio_copy_regular_file(
 
     /*
      * Verifica antes de considerar
-     * o arquivo concluído.
+     * o arquivo concluído (opcional na
+     * copia; o mover sempre verifica).
      */
-    fmio_file_done = 0;
+    if (fmio_verify) {
 
-    fmio_progress(
-        FILEIO_PHASE_VERIFY,
-        destination,
-        0
-    );
+        fmio_file_done = 0;
 
-
-    result = fmio_verify_file(
-        source,
-        destination,
-        status
-    );
+        fmio_progress(
+            FILEIO_PHASE_VERIFY,
+            destination,
+            0
+        );
 
 
-    if (result != FILEIO_COPY_OK)
-        return result;
+        result = fmio_verify_file(
+            source,
+            destination,
+            status
+        );
+
+
+        if (result != FILEIO_COPY_OK)
+            return result;
+    }
 
 
     if (status)
@@ -1152,7 +1167,7 @@ int fileio_copy_file(
 
         strcpy(
             status->stage,
-            "VERIFIED"
+            fmio_verify ? "VERIFIED" : "COPIED"
         );
     }
 

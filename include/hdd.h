@@ -23,6 +23,17 @@ int hdd_init(void);
 int hdd_layout_table(void);
 
 /*
+ * Depois de mudar o disco (fatfmt): APA/vazio libera o driver APA;
+ * MBR/GPT bloqueia (o HDD passa a ser aberto como ata0:).
+ */
+void hdd_set_layout(int table);
+
+/*
+ * 1 se DEV9 + ata_bd ja foram carregados (o disco "ata" existe).
+ */
+int hdd_stack_loaded(void);
+
+/*
  * Monta (ou reutiliza) a particao e devolve o ponto de
  * montagem ("pfs0:"/"pfs1:"). keep_point nunca e desmontado
  * (o clipboard aponta para ele). NULL em caso de erro.

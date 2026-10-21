@@ -282,24 +282,64 @@ static int is_supported_disk(struct block_device *bd)
            (strcmp(bd->name, "usb") == 0 || strcmp(bd->name, "ata") == 0);
 }
 
+/*
+ * Discos desconectados do BDM pelo WIPE (nao aparecem mais no
+ * bdm_get_bd ate a proxima TABLE/FORMAT reconectar).
+ */
+#define MAX_DETACHED 4
+
+static struct block_device *detached[MAX_DETACHED];
+
 
 /*
- * HDD interno ("ata", ata_bd.irx): por enquanto so leitura (LIST),
- * para decidir se o driver APA pode ser carregado.
+ * Discos conhecidos: os do BDM + os desconectados pelo WIPE.
+ * list deve ter espaco para 20 + MAX_DETACHED.
  */
-static int is_read_only_disk(struct block_device *bd)
+static int all_disks(struct block_device **list)
 {
-    return strcmp(bd->name, "ata") == 0;
-}
-
-static struct block_device *find_disk(const fatfmt_request_t *req)
-{
-    struct block_device *list[20];
     int i;
 
     bdm_get_bd(list, 20);
 
-    for (i = 0; i < 20; i++) {
+    for (i = 0; i < MAX_DETACHED; i++)
+        list[20 + i] = detached[i];
+
+    return 20 + MAX_DETACHED;
+}
+
+
+static void set_detached(struct block_device *bd, int value)
+{
+    int i;
+
+    for (i = 0; i < MAX_DETACHED; i++) {
+
+        if (detached[i] == bd)
+            detached[i] = NULL;
+    }
+
+    if (!value)
+        return;
+
+    for (i = 0; i < MAX_DETACHED; i++) {
+
+        if (detached[i] == NULL) {
+            detached[i] = bd;
+            return;
+        }
+    }
+}
+
+
+static struct block_device *find_disk(const fatfmt_request_t *req)
+{
+    struct block_device *list[20 + MAX_DETACHED];
+    int count;
+    int i;
+
+    count = all_disks(list);
+
+    for (i = 0; i < count; i++) {
 
         if (is_supported_disk(list[i]) &&
             strcmp(list[i]->name, req->name) == 0 &&
@@ -446,17 +486,18 @@ static int read_layout(struct block_device *bd, unsigned int *table, u64 *start,
 
 static int devctl_list(fatfmt_disk_t *out, unsigned int buflen)
 {
-    struct block_device *list[20];
+    struct block_device *list[20 + MAX_DETACHED];
     unsigned int table;
     unsigned int fs;
     u64 start;
     u64 count;
+    int total;
     int n = 0;
     int i;
 
-    bdm_get_bd(list, 20);
+    total = all_disks(list);
 
-    for (i = 0; i < 20; i++) {
+    for (i = 0; i < total; i++) {
 
         if (!is_supported_disk(list[i]))
             continue;
@@ -667,9 +708,6 @@ static int devctl_table(const fatfmt_request_t *req)
     if (!bd)
         return -ENODEV;
 
-    if (is_read_only_disk(bd))
-        return -FATFMT_ERR_READ_ONLY;
-
     total = bd->sectorCount;
 
     if (total < PART_START + 2 * 2048)
@@ -695,6 +733,7 @@ static int devctl_table(const fatfmt_request_t *req)
     if (bd->flush)
         bd->flush(bd);
 
+    set_detached(bd, 0);
     bdm_connect_bd(bd);
 
 
@@ -727,9 +766,6 @@ static int devctl_format(const fatfmt_request_t *req)
 
     if (!bd)
         return -ENODEV;
-
-    if (is_read_only_disk(bd))
-        return -FATFMT_ERR_READ_ONLY;
 
     result = read_layout(bd, &table, &start, &count, &fs);
 
@@ -821,9 +857,55 @@ static int devctl_format(const fatfmt_request_t *req)
     if (bd->flush)
         bd->flush(bd);
 
+    set_detached(bd, 0);
     bdm_connect_bd(bd);
 
     printf(MODNAME ": formatar -> %d\n", result);
+
+    return result;
+}
+
+
+/* ============================================================
+ * Apagar tabelas (para voltar ao APA)
+ * ============================================================ */
+
+static int devctl_wipe(const fatfmt_request_t *req)
+{
+    struct block_device *bd;
+    u64 total;
+    int result;
+
+
+    bd = find_disk(req);
+
+    if (!bd)
+        return -ENODEV;
+
+    total = bd->sectorCount;
+
+    if (total < PART_START + 64)
+        return -FATFMT_ERR_TOO_SMALL;
+
+    printf(MODNAME ": apagar tabelas de %s%u\n", bd->name, bd->devNr);
+
+
+    /*
+     * Fica desconectado: o bdmfs_fatfs nao pode ficar com o volume
+     * montado enquanto outro driver (APA) grava no disco.
+     */
+    bdm_disconnect_bd(bd);
+    set_detached(bd, 1);
+
+    result = disk_zero(bd, 0, PART_START);
+
+    if (result == 0)
+        result = disk_zero(bd, total - 1 - GPT_ENTRY_SECTORS, GPT_ENTRY_SECTORS + 1);
+
+    if (bd->flush)
+        bd->flush(bd);
+
+    printf(MODNAME ": apagar -> %d\n", result);
 
     return result;
 }
@@ -853,6 +935,11 @@ static int fatfmt_devctl(iomanX_iop_file_t *f, const char *name, int cmd,
             if (arglen < sizeof(fatfmt_request_t))
                 return -EINVAL;
             return devctl_format((const fatfmt_request_t *)arg);
+
+        case FATFMT_DEVCTL_WIPE:
+            if (arglen < sizeof(fatfmt_request_t))
+                return -EINVAL;
+            return devctl_wipe((const fatfmt_request_t *)arg);
     }
 
     return -EINVAL;

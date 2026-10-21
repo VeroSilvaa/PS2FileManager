@@ -35,6 +35,12 @@ int usbfmt_table(const fatfmt_disk_t *disk, unsigned int table);
 int usbfmt_format(const fatfmt_disk_t *disk, unsigned int fs);
 
 /*
+ * Zera as tabelas (1o MiB e fim) e deixa o disco fora do BDM: usado
+ * para voltar o HDD ao APA. APAGA TUDO.
+ */
+int usbfmt_wipe(const fatfmt_disk_t *disk);
+
+/*
  * Tamanho em MB e textos para a tela.
  */
 unsigned int usbfmt_size_mb(const fatfmt_disk_t *disk);

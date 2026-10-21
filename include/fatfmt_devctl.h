@@ -9,7 +9,6 @@
 
 /*
  * Discos: "usb" (pendrive) e "ata" (HDD interno, com ata_bd.irx).
- * No "ata" so a leitura (LIST) e permitida por enquanto.
  *
  * LIST: buf = fatfmt_disk_t[FATFMT_MAX_DISKS]; devolve quantos.
  * TABLE: arg = fatfmt_request_t (value = FATFMT_TABLE_*): cria a
@@ -20,6 +19,13 @@
 #define FATFMT_DEVCTL_LIST      0x4601
 #define FATFMT_DEVCTL_TABLE     0x4602
 #define FATFMT_DEVCTL_FORMAT    0x4603
+
+/*
+ * WIPE: arg = fatfmt_request_t. Desconecta o disco do BDM (nao
+ * reconecta) e zera o 1o MiB e o fim (tabelas MBR/GPT): o disco
+ * fica "vazio" para o driver APA formatar. APAGA TUDO.
+ */
+#define FATFMT_DEVCTL_WIPE      0x4604
 
 #define FATFMT_MAX_DISKS        8
 
@@ -40,7 +46,6 @@
 #define FATFMT_ERR_NO_PARTITION 1001   /* FORMAT sem tabela/particao */
 #define FATFMT_ERR_TOO_SMALL    1002
 #define FATFMT_ERR_IO           1003
-#define FATFMT_ERR_READ_ONLY    1004   /* disco "ata": so LIST */
 #define FATFMT_ERR_FATFS        1100
 
 typedef struct {
