@@ -25,6 +25,12 @@ ASSETS = os.path.join(ROOT, "assets")
 
 BACKGROUND_SRC = os.path.join(ROOT, "Fundo Futurista Azul com Símbolos PlayStation.png")
 FONT_MONO = os.path.join(ROOT, "third_party", "fonts", "NotoSansMono-Regular.ttf")
+FONT_SANS = os.path.join(ROOT, "third_party", "fonts", "NotoSans-Regular.ttf")
+
+# Fonte proporcional da interface (telas convertidas)
+SANS_SIZE = 14
+SANS_CELL_W, SANS_CELL_H = 16, 20
+SANS_BASELINE = 15
 
 SCREEN_W, SCREEN_H = 640, 448
 
@@ -89,10 +95,56 @@ def make_font():
     print("fonte: %d caracteres, atlas %dx%d" % (count, atlas.width, atlas.height))
 
 
+def make_sans():
+    """
+    assets/font_sans_14.png + assets/font_sans_14.h (largura de cada
+    caractere, em pixels, para o texto proporcional).
+    """
+    font = ImageFont.truetype(FONT_SANS, SANS_SIZE)
+    count = LAST_CHAR - FIRST_CHAR + 1
+    rows = (count + PER_ROW - 1) // PER_ROW
+
+    atlas = Image.new("L", (PER_ROW * SANS_CELL_W, rows * SANS_CELL_H), 0)
+    draw = ImageDraw.Draw(atlas)
+    widths = []
+
+    for code in range(FIRST_CHAR, LAST_CHAR + 1):
+        ch = char_for_byte(code)
+        width = 0
+
+        if ch is not None and ch.isprintable() and ch != "\x7f":
+
+            i = code - FIRST_CHAR
+            x = (i % PER_ROW) * SANS_CELL_W
+            y = (i // PER_ROW) * SANS_CELL_H
+
+            draw.text((x + 1, y + SANS_BASELINE), ch, fill=255, font=font, anchor="ls")
+            width = min(SANS_CELL_W - 1, round(font.getlength(ch)))
+
+        widths.append(width)
+
+    atlas.save(os.path.join(ASSETS, "font_sans_14.png"), optimize=True)
+
+    with open(os.path.join(ASSETS, "font_sans_14.h"), "w") as out:
+        out.write("/* Gerado por tools/make_assets.py: Noto Sans %d px, bytes %d..%d (Windows-1252). */\n"
+                  % (SANS_SIZE, FIRST_CHAR, LAST_CHAR))
+        out.write("#define FONT_SANS_CELL_W %d\n#define FONT_SANS_CELL_H %d\n\n" % (SANS_CELL_W, SANS_CELL_H))
+        out.write("static const unsigned char font_sans_width[%d] = {\n" % count)
+        for i in range(0, count, 16):
+            out.write("    " + ", ".join("%2d" % w for w in widths[i:i + 16]) + ",\n")
+        out.write("};\n")
+
+    preview = atlas.resize((atlas.width * 2, atlas.height * 2), Image.NEAREST)
+    preview.save(os.path.join(ASSETS, "preview_sans.png"))
+
+    print("fonte sans: atlas %dx%d" % (atlas.width, atlas.height))
+
+
 def main():
     os.makedirs(ASSETS, exist_ok=True)
     make_background()
     make_font()
+    make_sans()
     return 0
 
 

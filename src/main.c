@@ -5439,6 +5439,360 @@ static void draw_file_screen(void)
  * Desenho
  * ============================================================ */
 
+/* ============================================================
+ * Interface grafica: navegacao (T2, docs/interface-640x448.md)
+ * ============================================================ */
+
+/*
+ * Cores (secao 4 do documento; alfa do GS 0..128).
+ */
+#define UI_PANEL        gfx_rgba(0x0B, 0x16, 0x30, 0x64)
+#define UI_BORDER       gfx_rgba(0x2E, 0x5F, 0xB8, 0x80)
+#define UI_TITLE_BAR    gfx_rgba(0x12, 0x30, 0x6E, 0x80)
+#define UI_SEL_TOP      gfx_rgba(0x1E, 0x5B, 0xD8, 0x80)
+#define UI_SEL_BOTTOM   gfx_rgba(0x2F, 0x7B, 0xFF, 0x80)
+#define UI_SEL_DIM      gfx_rgba(0x16, 0x3B, 0x7A, 0x80)
+#define UI_MARKED       gfx_rgba(0x16, 0x3B, 0x7A, 0x80)
+#define UI_TEXT         gfx_rgba(0xE6, 0xEE, 0xFF, 0x80)
+#define UI_TEXT2        gfx_rgba(0x9D, 0xB2, 0xD9, 0x80)
+#define UI_TEXT_OFF     gfx_rgba(0x56, 0x62, 0x7A, 0x80)
+#define UI_OK           gfx_rgba(0x3D, 0xDC, 0x84, 0x80)
+#define UI_ERROR        gfx_rgba(0xE5, 0x48, 0x4D, 0x80)
+#define UI_FOLDER       gfx_rgba(0xF2, 0xC1, 0x4E, 0x80)
+#define UI_FILE         gfx_rgba(0xC8, 0xD4, 0xEE, 0x80)
+
+/*
+ * Regioes (secao 2).
+ */
+#define UI_DEV_X        24
+#define UI_DEV_W        176
+#define UI_PANEL_Y      56
+#define UI_PANEL_H      320
+#define UI_FILES_X      208
+#define UI_FILES_W      408
+#define UI_ROW_H        22
+#define UI_ROWS         12
+
+/*
+ * Primeira linha visivel da lista de arquivos (a grafica mostra 12
+ * linhas; o filemanager rola para 18).
+ */
+static int gui_top = 0;
+
+
+static void gui_panel(float x, float y, float w, float h, const char *title)
+{
+    gfx_rect(x, y, w, h, UI_PANEL);
+    gfx_rect(x + 2, y + 2, w - 4, 24, UI_TITLE_BAR);
+    gfx_border(x, y, w, h, 2, UI_BORDER);
+
+    if (title)
+        gfx_text_fit(x + 10, y + 4, w - 20, title, UI_TEXT);
+}
+
+
+static void gui_selection(float x, float y, float w, float h, int focused)
+{
+    if (focused)
+        gfx_rect_vgradient(x, y, w, h, UI_SEL_TOP, UI_SEL_BOTTOM);
+    else
+        gfx_rect(x, y, w, h, UI_SEL_DIM);
+}
+
+
+/*
+ * Icones simples desenhados por codigo (ate existirem os PNGs).
+ */
+static void gui_icon_folder(float x, float y)
+{
+    gfx_rect(x, y + 2, 7, 3, UI_FOLDER);
+    gfx_rect(x, y + 4, 16, 11, UI_FOLDER);
+}
+
+
+static void gui_icon_file(float x, float y)
+{
+    gfx_rect(x + 2, y + 1, 12, 15, UI_FILE);
+    gfx_rect(x + 4, y + 5, 8, 1, UI_SEL_TOP);
+    gfx_rect(x + 4, y + 8, 8, 1, UI_SEL_TOP);
+    gfx_rect(x + 4, y + 11, 6, 1, UI_SEL_TOP);
+}
+
+
+/*
+ * Nome curto e situacao de cada item da lista de dispositivos.
+ */
+static void gui_device_info(int device, const char **name, char *state, int state_size, int *available)
+{
+    static char usb_name[2][16];
+
+    *available = 1;
+    state[0] = '\0';
+
+    switch (device) {
+
+        case 0:
+        case 1:
+            *name = device == 0 ? "Memory Card 1" : "Memory Card 2";
+            *available = device == 0 ? mc0_available : mc1_available;
+            snprintf(state, state_size, "%s", *available ? "Disponivel" : "Indisponivel");
+            break;
+
+        case DEVICE_SMB:
+            *name = "Rede (SMB)";
+            snprintf(state, state_size, "%s%s/%s",
+                     smb_get_info()->connected ? "Conectado: " : "",
+                     config_get()->smb_server, config_get()->smb_share);
+            break;
+
+        case DEVICE_HDD:
+            *name = "HDD interno";
+            if (hdd_layout_table() == FATFMT_TABLE_MBR || hdd_layout_table() == FATFMT_TABLE_GPT)
+                snprintf(state, state_size, "%s exFAT/FAT32 (ata0:)", usbfmt_table_name(hdd_layout_table()));
+            else
+                snprintf(state, state_size, "APA, %d particao(oes) montada(s)", hdd_mounted_count());
+            break;
+
+        case DEVICE_CONFIG:
+            *name = "Configuracoes";
+            snprintf(state, state_size, "Rede: %s", config_get()->dhcp ? "DHCP" : config_get()->ip);
+            break;
+
+        default: {
+            int unit = device - DEVICE_USB0;
+
+            snprintf(usb_name[unit], sizeof(usb_name[unit]), "Pendrive " USB_PREFIX "%d", unit);
+            *name = usb_name[unit];
+
+            if (!usb_ready())
+                snprintf(state, state_size, "X para detectar");
+            else {
+                *available = usb_present[unit];
+                snprintf(state, state_size, "%s", *available ? "Disponivel" : "Ausente");
+            }
+            break;
+        }
+    }
+}
+
+
+/*
+ * Dispositivo do caminho atual (para destacar na lista).
+ */
+static int gui_current_device(void)
+{
+    const char *path = file_manager.current_path;
+
+    if (!strncmp(path, "mc0", 3)) return 0;
+    if (!strncmp(path, "mc1", 3)) return 1;
+    if (!strncmp(path, "smb", 3)) return DEVICE_SMB;
+    if (!strncmp(path, "hdd", 3) || !strncmp(path, "pfs", 3) || !strncmp(path, "ata", 3)) return DEVICE_HDD;
+    if (!strncmp(path, USB_PREFIX, strlen(USB_PREFIX))) return DEVICE_USB0 + (path[strlen(USB_PREFIX)] == '1');
+
+    return -1;
+}
+
+
+static void gui_header(void)
+{
+    char line[96];
+
+    gfx_text(UI_DEV_X + 2, 20, "PS2FileManager", UI_TEXT);
+
+    /*
+     * Direita: a musica tocando, senao o IP (rede ligada).
+     */
+    mp3player_now_playing(line, sizeof(line));
+
+    if (!line[0] && network_get_info()->initialized)
+        snprintf(line, sizeof(line), "IP: %s", network_get_info()->ip);
+
+    if (line[0]) {
+
+        float w = gfx_text_width(line);
+
+        if (w > 400)
+            gfx_text_fit(UI_DEV_X + 592 - 400, 20, 400, line, UI_TEXT2);
+        else
+            gfx_text_right(UI_DEV_X + 592, 20, line, UI_TEXT2);
+    }
+}
+
+
+static void gui_devices_panel(int focused)
+{
+    int current = focused ? device_cursor : gui_current_device();
+    int i;
+
+    gui_panel(UI_DEV_X, UI_PANEL_Y, UI_DEV_W, UI_PANEL_H, "Dispositivos");
+
+    for (i = 0; i < DEVICE_COUNT; i++) {
+
+        const char *name;
+        char state[64];
+        int available;
+        float y = UI_PANEL_Y + 34 + i * 34;
+
+        gui_device_info(i, &name, state, sizeof(state), &available);
+
+        if (i == current)
+            gui_selection(UI_DEV_X + 6, y, UI_DEV_W - 12, 28, focused);
+
+        /*
+         * Uma linha por item (como o mockup); indisponivel em cinza.
+         * A situacao aparece no painel da direita.
+         */
+        gfx_text_fit(UI_DEV_X + 14, y + 4, UI_DEV_W - 28, name, available ? UI_TEXT : UI_TEXT_OFF);
+    }
+}
+
+
+static void gui_files_panel(int focused)
+{
+    char size_text[24];
+    int i;
+
+    if (!focused) {
+
+        /*
+         * Lista de dispositivos: detalhes do item escolhido.
+         */
+        const char *name;
+        char state[96];
+        int available;
+
+        gui_device_info(device_cursor, &name, state, sizeof(state), &available);
+
+        gui_panel(UI_FILES_X, UI_PANEL_Y, UI_FILES_W, UI_PANEL_H, name);
+
+        gfx_text(UI_FILES_X + 16, UI_PANEL_Y + 40, "Situacao:", UI_TEXT2);
+        gfx_text_fit(UI_FILES_X + 96, UI_PANEL_Y + 40, UI_FILES_W - 112, state, available ? UI_OK : UI_TEXT_OFF);
+
+        gfx_text(UI_FILES_X + 16, UI_PANEL_Y + 80, "X abre o dispositivo.", UI_TEXT2);
+
+        if (device_cursor == DEVICE_HDD || (device_cursor >= DEVICE_USB0 && device_cursor < DEVICE_CONFIG))
+            gfx_text(UI_FILES_X + 16, UI_PANEL_Y + 104, "R1 formata (pede confirmacao).", UI_TEXT2);
+
+        return;
+    }
+
+    gui_panel(UI_FILES_X, UI_PANEL_Y, UI_FILES_W, UI_PANEL_H, file_manager.current_path);
+
+
+    /*
+     * Cabecalho das colunas.
+     */
+    gfx_text(UI_FILES_X + 48, UI_PANEL_Y + 28, "Nome", UI_TEXT2);
+    gfx_text_right(UI_FILES_X + UI_FILES_W - 12, UI_PANEL_Y + 28, "Tamanho", UI_TEXT2);
+
+    if (file_manager.count == 0) {
+        gfx_text(UI_FILES_X + 48, UI_PANEL_Y + 56, "Pasta vazia", UI_TEXT_OFF);
+        return;
+    }
+
+
+    /*
+     * Rolagem propria (12 linhas visiveis).
+     */
+    if (file_manager.cursor < gui_top)
+        gui_top = file_manager.cursor;
+
+    if (file_manager.cursor >= gui_top + UI_ROWS)
+        gui_top = file_manager.cursor - UI_ROWS + 1;
+
+    if (gui_top > file_manager.count - 1)
+        gui_top = 0;
+
+
+    for (i = gui_top; i < file_manager.count && i < gui_top + UI_ROWS; i++) {
+
+        FMEntry *entry = &file_manager.entries[i];
+        float y = UI_PANEL_Y + 50 + (i - gui_top) * UI_ROW_H;
+        int is_cursor = i == file_manager.cursor;
+
+        if (is_cursor)
+            gui_selection(UI_FILES_X + 4, y, UI_FILES_W - 8, UI_ROW_H, 1);
+        else if (entry->selected)
+            gfx_rect(UI_FILES_X + 4, y, UI_FILES_W - 8, UI_ROW_H, UI_MARKED);
+
+        /*
+         * Caixa de selecao (marcar com QUADRADO).
+         */
+        gfx_border(UI_FILES_X + 8, y + 4, 14, 14, 2, entry->selected ? UI_OK : UI_TEXT_OFF);
+
+        if (entry->selected)
+            gfx_rect(UI_FILES_X + 11, y + 7, 8, 8, UI_OK);
+
+        if (entry->is_dir)
+            gui_icon_folder(UI_FILES_X + 28, y + 3);
+        else
+            gui_icon_file(UI_FILES_X + 28, y + 3);
+
+        gfx_text_fit(UI_FILES_X + 50, y + 1, UI_FILES_W - 50 - 92, entry->name, UI_TEXT);
+
+        if (entry->is_dir) {
+            gfx_text_right(UI_FILES_X + UI_FILES_W - 12, y + 1, "<DIR>", is_cursor ? UI_TEXT : UI_TEXT2);
+        } else {
+            format_size(size_text, sizeof(size_text), entry->size);
+            gfx_text_right(UI_FILES_X + UI_FILES_W - 12, y + 1, size_text, is_cursor ? UI_TEXT : UI_TEXT2);
+        }
+    }
+
+    /*
+     * Posicao na lista quando nao cabe tudo.
+     */
+    if (file_manager.count > UI_ROWS) {
+
+        char position[24];
+
+        snprintf(position, sizeof(position), "%d / %d", file_manager.cursor + 1, file_manager.count);
+        gfx_text_right(UI_FILES_X + UI_FILES_W - 12, UI_PANEL_Y + 4, position, UI_TEXT2);
+    }
+}
+
+
+static void gui_footer(int files)
+{
+    float x = UI_DEV_X + 4;
+    float y = 408;
+
+    gfx_rect(UI_DEV_X, 402, 592, 2, UI_BORDER);
+
+    x += gfx_button_hint(x, y, GFX_BTN_CROSS, "Abrir");
+
+    if (files) {
+        x += gfx_button_hint(x, y, GFX_BTN_CIRCLE, "Voltar");
+        x += gfx_button_hint(x, y, GFX_BTN_SQUARE, "Marcar");
+        x += gfx_button_hint(x, y, GFX_BTN_TRIANGLE, "Todos");
+        x += gfx_button_hint(x, y, GFX_BTN_R1, "Menu");
+    } else {
+        x += gfx_button_hint(x, y, GFX_BTN_TRIANGLE, "Atualizar");
+        x += gfx_button_hint(x, y, GFX_BTN_R1, "Formatar");
+    }
+
+    if (mp3player_active())
+        gfx_button_hint(x, y, GFX_BTN_SELECT, "Player");
+}
+
+
+static void draw_gui_browser(void)
+{
+    int files = current_screen == SCREEN_FILES;
+
+    gui_header();
+    gui_devices_panel(!files);
+    gui_files_panel(files);
+
+    /*
+     * Status: vermelho em erro.
+     */
+    gfx_text_fit(UI_DEV_X + 2, 380, 592, status_message,
+                 strncmp(status_message, "ERRO", 4) == 0 ? UI_ERROR : UI_TEXT2);
+
+    gui_footer(files);
+}
+
+
 static void draw_screen(void)
 {
     static char last_logged_status[256];
@@ -5461,6 +5815,19 @@ static void draw_screen(void)
         );
     }
 
+    /*
+     * Telas convertidas para a interface grafica: o gfx chama o
+     * desenho a cada quadro. As outras usam a camada de texto.
+     */
+    if (screen_is_plain()) {
+
+        gfx_set_screen(draw_gui_browser);
+
+        return;
+    }
+
+    gfx_set_screen(NULL);
+
     if (current_screen ==
         SCREEN_DEVICES) {
 
@@ -5474,7 +5841,7 @@ static void draw_screen(void)
 
     } else if (current_screen == SCREEN_PLAYER) {
 
-        mp3player_draw(0);
+        mp3player_draw(1);
 
     } else {
 

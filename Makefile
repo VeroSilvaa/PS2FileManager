@@ -25,11 +25,11 @@ IRX_OBJS += irx/AUDSRV_irx.o
 EE_OBJS += $(IRX_OBJS)
 
 # Interface grafica: PNGs de assets/ (tools/make_assets.sh) embutidos
-ASSET_OBJS = irx/bg_png.o irx/font_mono_png.o
+ASSET_OBJS = irx/bg_png.o irx/font_mono_png.o irx/font_sans_png.o
 EE_OBJS += $(ASSET_OBJS)
 
 EE_INCS = -I$(PS2SDK)/ee/include -I$(PS2SDK)/common/include -I$(PS2SDK)/ports/include \
-          -I$(GSKIT)/include -Iinclude -Ithird_party/minimp3
+          -I$(GSKIT)/include -Iinclude -Iassets -Ithird_party/minimp3
 
 EE_LDFLAGS += -L$(GSKIT)/lib -L$(PS2SDK)/ports/lib
 
@@ -54,6 +54,12 @@ irx/bg_png.c: assets/bg_640x448.png
 irx/font_mono_png.c: assets/font_mono_8x16.png
 	@mkdir -p irx
 	bin2c $< $@ font_mono_png
+
+irx/font_sans_png.c: assets/font_sans_14.png
+	@mkdir -p irx
+	bin2c $< $@ font_sans_png
+
+src/gfx.o: assets/font_sans_14.h
 
 # Nome do arquivo diferente do simbolo (ps2ip-nm tem hifen)
 irx/DEV9_irx.c: $(PS2SDK)/iop/irx/ps2dev9.irx

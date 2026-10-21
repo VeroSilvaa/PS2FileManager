@@ -12,6 +12,7 @@
 #include "gfx.h"
 #include "console.h"
 #include "pngload.h"
+#include "font_sans_14.h"
 
 /*
  * PNGs embutidos (assets/, gerados por tools/make_assets.sh).
@@ -21,6 +22,9 @@ extern unsigned int size_bg_png;
 
 extern unsigned char font_mono_png[];
 extern unsigned int size_font_mono_png;
+
+extern unsigned char font_sans_png[];
+extern unsigned int size_font_sans_png;
 
 #define SCREEN_W        640
 #define SCREEN_H        448
@@ -41,6 +45,12 @@ extern unsigned int size_font_mono_png;
 static GSGLOBAL *gs;
 static GSTEXTURE background;
 static GSTEXTURE font;
+static GSTEXTURE sans;
+
+/*
+ * Tela convertida (desenha o quadro) ou NULL (camada de texto).
+ */
+static void (*screen_draw)(void) = NULL;
 
 static int ready = 0;
 static float scale_y = 1.0f;        /* PAL: 512 linhas */
@@ -78,10 +88,10 @@ static int load_background(void)
 
 
 /*
- * Fonte: cinza -> RGBA branco com alfa (0..128 do GS). A cor do
- * texto vem da cor do sprite (modulacao).
+ * Atlas de fonte: cinza -> RGBA branco com alfa (0..128 do GS). A
+ * cor do texto vem da cor do sprite (modulacao).
  */
-static int load_font(void)
+static int load_font(const unsigned char *png, unsigned int size, GSTEXTURE *tex)
 {
     unsigned char *gray;
     unsigned char *rgba;
@@ -89,7 +99,7 @@ static int load_font(void)
     int h;
     int i;
 
-    gray = png_decode(font_mono_png, size_font_mono_png, 1, &w, &h);
+    gray = png_decode(png, size, 1, &w, &h);
 
     if (!gray)
         return -1;
@@ -110,12 +120,12 @@ static int load_font(void)
 
     free(gray);
 
-    font.Mem = (u32 *)rgba;
-    font.Width = w;
-    font.Height = h;
-    font.PSM = GS_PSM_CT32;
-    font.Filter = GS_FILTER_NEAREST;
-    font.Vram = 0;
+    tex->Mem = (u32 *)rgba;
+    tex->Width = w;
+    tex->Height = h;
+    tex->PSM = GS_PSM_CT32;
+    tex->Filter = GS_FILTER_NEAREST;
+    tex->Vram = 0;
 
     return 0;
 }
@@ -164,8 +174,11 @@ int gfx_init(void)
     if (load_background() < 0)
         printf("FM GFX: fundo nao carregou\n");
 
-    if (load_font() < 0)
-        printf("FM GFX: fonte nao carregou\n");
+    if (load_font(font_mono_png, size_font_mono_png, &font) < 0)
+        printf("FM GFX: fonte mono nao carregou\n");
+
+    if (load_font(font_sans_png, size_font_sans_png, &sans) < 0)
+        printf("FM GFX: fonte sans nao carregou\n");
 
     ready = 1;
 
@@ -220,13 +233,7 @@ void gfx_frame(void)
 
     if (background.Mem) {
 
-        static int logged = 0;
-        unsigned int vram = gsKit_TexManager_bind(gs, &background);
-
-        if (!logged) {
-            printf("FM GFX: fundo na VRAM 0x%x\n", vram);
-            logged = 1;
-        }
+        gsKit_TexManager_bind(gs, &background);
 
         gsKit_prim_sprite_texture(gs, &background,
                                   0, 0, 0, 0,
@@ -235,14 +242,21 @@ void gfx_frame(void)
                                   0, COLOR_WHITE);
     }
 
-    /*
-     * Painel translucido atras do texto (com borda), deixando o
-     * fundo aparecer nas margens.
-     */
-    gsKit_prim_sprite(gs, 4, 4 * scale_y, SCREEN_W - 4, (SCREEN_H - 4) * scale_y, 1, COLOR_PANEL);
+    if (screen_draw) {
 
-    if (font.Mem)
-        draw_text_layer();
+        screen_draw();
+
+    } else {
+
+        /*
+         * Camada de texto (telas ainda nao convertidas): painel
+         * translucido atras, o fundo aparece nas margens.
+         */
+        gsKit_prim_sprite(gs, 4, 4 * scale_y, SCREEN_W - 4, (SCREEN_H - 4) * scale_y, 1, COLOR_PANEL);
+
+        if (font.Mem)
+            draw_text_layer();
+    }
 
     gsKit_queue_exec(gs);
     gsKit_sync_flip(gs);
@@ -256,4 +270,224 @@ void gfx_frame_throttled(void)
 {
     if (clock() - last_frame >= CLOCKS_PER_SEC / 20)
         gfx_frame();
+}
+
+
+void gfx_set_screen(void (*draw)(void))
+{
+    screen_draw = draw;
+}
+
+
+/* ============================================================
+ * Primitivas (coordenadas 640x448)
+ * ============================================================ */
+
+gfx_color gfx_rgba(int r, int g, int b, int a)
+{
+    return GS_SETREG_RGBAQ(r, g, b, a, 0x00);
+}
+
+
+void gfx_rect(float x, float y, float w, float h, gfx_color color)
+{
+    gsKit_prim_sprite(gs, x, y * scale_y, x + w, (y + h) * scale_y, 1, color);
+}
+
+
+void gfx_rect_vgradient(float x, float y, float w, float h, gfx_color top, gfx_color bottom)
+{
+    gsKit_prim_quad_gouraud(gs,
+                            x, y * scale_y,
+                            x + w, y * scale_y,
+                            x, (y + h) * scale_y,
+                            x + w, (y + h) * scale_y,
+                            1, top, top, bottom, bottom);
+}
+
+
+void gfx_border(float x, float y, float w, float h, int thick, gfx_color color)
+{
+    gfx_rect(x, y, w, thick, color);
+    gfx_rect(x, y + h - thick, w, thick, color);
+    gfx_rect(x, y + thick, thick, h - 2 * thick, color);
+    gfx_rect(x + w - thick, y + thick, thick, h - 2 * thick, color);
+}
+
+
+static int char_width(unsigned char c)
+{
+    if (c < FONT_FIRST)
+        return 0;
+
+    return font_sans_width[c - FONT_FIRST];
+}
+
+
+int gfx_text_width(const char *text)
+{
+    int width = 0;
+
+    while (*text)
+        width += char_width((unsigned char)*text++);
+
+    return width;
+}
+
+
+/*
+ * Desenha 'length' bytes de text (sem limite: -1).
+ */
+static int draw_sans(float x, float y, const char *text, int length, gfx_color color)
+{
+    float start = x;
+    int i;
+
+    if (!sans.Mem)
+        return 0;
+
+    gsKit_TexManager_bind(gs, &sans);
+
+    for (i = 0; text[i] && (length < 0 || i < length); i++) {
+
+        unsigned char c = (unsigned char)text[i];
+        int width = char_width(c);
+        int index;
+        float u;
+        float v;
+
+        if (c > ' ') {
+
+            index = c - FONT_FIRST;
+            u = (index % FONT_PER_ROW) * FONT_SANS_CELL_W;
+            v = (index / FONT_PER_ROW) * FONT_SANS_CELL_H;
+
+            /*
+             * A celula tem 1 px de margem a esquerda (make_assets.py).
+             */
+            gsKit_prim_sprite_texture(gs, &sans,
+                                      x - 1, y * scale_y, u, v,
+                                      x - 1 + FONT_SANS_CELL_W, (y + FONT_SANS_CELL_H) * scale_y,
+                                      u + FONT_SANS_CELL_W, v + FONT_SANS_CELL_H,
+                                      2, color);
+        }
+
+        x += width;
+    }
+
+    return (int)(x - start);
+}
+
+
+int gfx_text(float x, float y, const char *text, gfx_color color)
+{
+    return draw_sans(x, y, text, -1, color);
+}
+
+
+void gfx_text_fit(float x, float y, float max_w, const char *text, gfx_color color)
+{
+    static const char ellipsis[] = "\x85";      /* ... em Windows-1252 */
+    int ellipsis_w = char_width(0x85);
+    int width = 0;
+    int i;
+
+    if (gfx_text_width(text) <= max_w) {
+        draw_sans(x, y, text, -1, color);
+        return;
+    }
+
+    for (i = 0; text[i]; i++) {
+
+        int w = char_width((unsigned char)text[i]);
+
+        if (width + w + ellipsis_w > max_w)
+            break;
+
+        width += w;
+    }
+
+    draw_sans(x, y, text, i, color);
+    draw_sans(x + width, y, ellipsis, -1, color);
+}
+
+
+void gfx_text_right(float right, float y, const char *text, gfx_color color)
+{
+    draw_sans(right - gfx_text_width(text), y, text, -1, color);
+}
+
+
+void gfx_line(float x1, float y1, float x2, float y2, gfx_color color)
+{
+    gsKit_prim_line(gs, x1, y1 * scale_y, x2, y2 * scale_y, 1, color);
+}
+
+
+void gfx_triangle(float x1, float y1, float x2, float y2, float x3, float y3, gfx_color color)
+{
+    gsKit_prim_triangle(gs, x1, y1 * scale_y, x2, y2 * scale_y, x3, y3 * scale_y, 1, color);
+}
+
+
+/*
+ * Linha "grossa" (2 px): evita a cintilacao do entrelacado.
+ */
+static void thick_line(float x1, float y1, float x2, float y2, gfx_color color)
+{
+    gfx_line(x1, y1, x2, y2, color);
+    gfx_line(x1 + 1, y1, x2 + 1, y2, color);
+    gfx_line(x1, y1 + 1, x2, y2 + 1, color);
+}
+
+
+int gfx_button_hint(float x, float y, GfxButton button, const char *label)
+{
+    static const char *names[] = { "", "", "", "", "L1", "R1", "SELECT", "START" };
+    gfx_color text = gfx_rgba(0xE6, 0xEE, 0xFF, 0x80);
+    gfx_color dark = gfx_rgba(0x0B, 0x16, 0x30, 0x80);
+    float icon_w = 18;
+
+    switch (button) {
+
+        case GFX_BTN_CROSS: {
+            gfx_color c = gfx_rgba(0x7C, 0xB2, 0xFF, 0x80);
+            thick_line(x + 3, y + 4, x + 14, y + 15, c);
+            thick_line(x + 14, y + 4, x + 3, y + 15, c);
+            break;
+        }
+
+        case GFX_BTN_CIRCLE: {
+            gfx_color c = gfx_rgba(0xFF, 0x6B, 0x6B, 0x80);
+            gfx_border(x + 3, y + 3, 13, 13, 2, c);
+            gfx_rect(x + 3, y + 3, 2, 2, dark);         /* cantos "arredondados" */
+            gfx_rect(x + 14, y + 3, 2, 2, dark);
+            gfx_rect(x + 3, y + 14, 2, 2, dark);
+            gfx_rect(x + 14, y + 14, 2, 2, dark);
+            break;
+        }
+
+        case GFX_BTN_SQUARE:
+            gfx_border(x + 3, y + 3, 13, 13, 2, gfx_rgba(0xF2, 0x8C, 0xE6, 0x80));
+            break;
+
+        case GFX_BTN_TRIANGLE: {
+            gfx_color c = gfx_rgba(0x5C, 0xE6, 0xB0, 0x80);
+            thick_line(x + 9, y + 3, x + 2, y + 15, c);
+            thick_line(x + 9, y + 3, x + 16, y + 15, c);
+            thick_line(x + 2, y + 15, x + 16, y + 15, c);
+            break;
+        }
+
+        default:
+            /*
+             * L1/R1/SELECT/START: rotulo numa caixa.
+             */
+            icon_w = gfx_text_width(names[button]) + 8;
+            gfx_rect(x, y + 1, icon_w, 17, gfx_rgba(0xC8, 0xD4, 0xEE, 0x70));
+            gfx_text(x + 4, y - 1, names[button], dark);
+            break;
+    }
+
+    return (int)(icon_w + 4 + gfx_text(x + icon_w + 4, y - 1, label, text) + 16);
 }
