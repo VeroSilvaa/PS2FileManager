@@ -38,6 +38,7 @@
 #include "config.h"
 #include "settings.h"
 #include "usbfmt.h"
+#include "mp3player.h"
 
 
 
@@ -4530,6 +4531,40 @@ static void update_settings_screen(void)
 
 
 /* ============================================================
+ * MP3 player
+ * ============================================================ */
+
+/*
+ * Botoes recem-pressionados para o player (ele tem o proprio laco).
+ */
+static unsigned int mp3_pad(void)
+{
+    if (!read_pad())
+        return 0;
+
+    return new_pad & ~old_pad;
+}
+
+
+static void open_mp3_player(const char *name)
+{
+    if (mp3player_run(file_manager.current_path, name, mp3_pad) < 0) {
+
+        snprintf(
+            status_message,
+            sizeof(status_message),
+            "MP3: %s",
+            mp3player_error()
+        );
+
+        return;
+    }
+
+    set_status("MP3: player fechado.");
+}
+
+
+/* ============================================================
  * Tela do gerenciador
  * ============================================================ */
 
@@ -4609,6 +4644,20 @@ static void update_file_screen(void)
         is_partition_list()) {
 
         enter_partition();
+
+        return;
+    }
+
+
+    /*
+     * X num .mp3: player (a pasta e a playlist).
+     */
+    if (pressed(PAD_CROSS) &&
+        file_manager.count > 0 &&
+        !file_manager.entries[file_manager.cursor].is_dir &&
+        mp3_is_mp3(file_manager.entries[file_manager.cursor].name)) {
+
+        open_mp3_player(file_manager.entries[file_manager.cursor].name);
 
         return;
     }

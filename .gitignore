@@ -16,6 +16,7 @@
 # Imagens de pendrive de teste (recriar com usb/mkimg.sh)
 /usb/*.img
 /usb/backup-antes-formatar/
+/usb/mp3-teste/
 
 # Notas internas de desenvolvimento
 /PS2FileManager_Prompt_Desenvolvimento.md

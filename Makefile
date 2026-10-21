@@ -1,6 +1,6 @@
 EE_BIN = PS2FileManager.elf
 
-EE_OBJS = src/main.o src/memorycard.o src/filemanager.o src/clipboard.o src/fm_fileio.o src/network.o src/smb.o src/dev9.o src/hdd.o src/usb.o src/iso9660.o src/hdl.o src/osk.o src/config.o src/settings.o src/usbfmt.o src/bdmcore.o
+EE_OBJS = src/main.o src/memorycard.o src/filemanager.o src/clipboard.o src/fm_fileio.o src/network.o src/smb.o src/dev9.o src/hdd.o src/usb.o src/iso9660.o src/hdl.o src/osk.o src/config.o src/settings.o src/usbfmt.o src/bdmcore.o src/id3.o src/mp3dec.o src/mp3player.o
 
 # Modulos IOP do PS2SDK embutidos no ELF (mesmo modelo do wLaunchELF)
 IRX_OBJS = irx/iomanX_irx.o irx/fileXio_irx.o irx/mcman_irx.o irx/mcserv_irx.o
@@ -19,15 +19,21 @@ IRX_OBJS += irx/USBD_irx.o irx/BDM_irx.o irx/BDMFS_FATFS_irx.o irx/USBMASS_BD_ir
 
 # Formatacao FAT32/exFAT e tabela MBR/GPT (modulo proprio, iop/fatfmt)
 IRX_OBJS += irx/FATFMT_irx.o
+
+# MP3 player: saida de audio (o LIBSD vem da ROM do console)
+IRX_OBJS += irx/AUDSRV_irx.o
 EE_OBJS += $(IRX_OBJS)
 
-EE_INCS = -I$(PS2SDK)/ee/include -I$(PS2SDK)/common/include -Iinclude
+EE_INCS = -I$(PS2SDK)/ee/include -I$(PS2SDK)/common/include -Iinclude -Ithird_party/minimp3
 
-EE_LIBS = -lpad -lmc -lfileXio -lnetman -lps2ips -lpatches -ldebug -lkernel
+EE_LIBS = -laudsrv -lpad -lmc -lfileXio -lnetman -lps2ips -lpatches -ldebug -lkernel
 
 EE_CFLAGS = -O2 -G0 -Wall
 
 all: $(EE_BIN)
+
+# minimp3: constantes como float (o EE nao tem FPU de precisao dupla)
+src/mp3dec.o: EE_CFLAGS += -fsingle-precision-constant
 
 irx/%_irx.c: $(PS2SDK)/iop/irx/%.irx
 	@mkdir -p irx
@@ -92,6 +98,10 @@ $(FATFMT_DIR)/fatfmt.irx: $(wildcard $(FATFMT_DIR)/src/* $(FATFMT_DIR)/fatfs/*) 
 irx/FATFMT_irx.c: $(FATFMT_DIR)/fatfmt.irx
 	@mkdir -p irx
 	bin2c $< $@ FATFMT_irx
+
+irx/AUDSRV_irx.c: $(PS2SDK)/iop/irx/audsrv.irx
+	@mkdir -p irx
+	bin2c $< $@ AUDSRV_irx
 
 irx/PS2FS_irx.c: $(PS2SDK)/iop/irx/ps2fs.irx
 	@mkdir -p irx
