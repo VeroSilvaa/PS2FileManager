@@ -47,4 +47,15 @@ int hdl_install(
 
 const char *hdl_error(void);
 
+/*
+ * Situacao de um jogo antes de instalar (HDD APA ja iniciado).
+ * HDL_GAME_INSTALLED: 'found' recebe o nome da particao.
+ */
+#define HDL_GAME_OK         0
+#define HDL_GAME_INSTALLED  1
+#define HDL_GAME_DVD9       2
+#define HDL_GAME_BAD_ID     3
+
+int hdl_game_status(const IsoGameInfo *game, char *found, int size);
+
 #endif

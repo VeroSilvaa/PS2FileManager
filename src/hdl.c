@@ -229,6 +229,25 @@ static int hdl_already_installed(const char *disc_id, char *found, int size)
 }
 
 
+int hdl_game_status(const IsoGameInfo *game, char *found, int size)
+{
+    char disc_id[16];
+
+    found[0] = '\0';
+
+    if (!hdl_disc_id(game->game_id, disc_id))
+        return HDL_GAME_BAD_ID;
+
+    if (game->sectors > HDL_DVD5_MAX_SECTORS)
+        return HDL_GAME_DVD9;
+
+    if (hdl_already_installed(disc_id, found, size))
+        return HDL_GAME_INSTALLED;
+
+    return HDL_GAME_OK;
+}
+
+
 /*
  * Escolhe o tamanho de uma particao para 'needed' setores de dados
  * (512): a menor que caiba, sem desperdicar 128 MB ou mais (nesse
@@ -325,9 +344,14 @@ static int hdl_create_partition(
     }
 
 
-    free_sectors = 0;
-
-    fileXioDevctl("hdd0:", HDIOC_FREESECTOR, NULL, 0, &free_sectors, sizeof(free_sectors));
+    /*
+     * Livre = total - soma das particoes (hdd_free_mb). O
+     * HDIOC_FREESECTOR nao e o espaco livre: e uma mascara dos
+     * tamanhos "instalaveis" (HDD.IRX da Sony) e, com buracos na
+     * cadeia APA (particao excluida), cai para 128 MB. Se a criacao
+     * falhar, a particao incompleta e apagada.
+     */
+    free_sectors = hdd_free_mb() * 2048;
 
     printf(
         "FM HDL: plano %d particao(oes), %u MB; livre %u MB\n",

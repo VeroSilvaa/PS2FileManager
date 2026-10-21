@@ -279,6 +279,14 @@ static int hdl_info_open = 0;
 static char hdl_reason[96];
 
 /*
+ * Situacao de cada jogo (HDL_GAME_*) e o espaco livre, para a janela.
+ */
+static int hdl_state[HDL_MAX_GAMES];
+static char hdl_found[HDL_MAX_GAMES][40];
+static unsigned int hdl_free_mb = 0;
+static int hdl_cursor = 0;
+
+/*
  * Conferencia completa (rele tudo): opcional, dobra o tempo.
  * A conferencia "como o OPL" roda sempre.
  */
@@ -2212,10 +2220,17 @@ static void hdl_check(void)
 
     hdl_available = 1;
 
+    for (i = 0; i < hdl_count; i++)
+        hdl_state[i] = hdl_game_status(&hdl_games[i], hdl_found[i], sizeof(hdl_found[i]));
+
+    hdl_free_mb = hdd_free_mb();
+    hdl_cursor = 0;
+
     printf(
-        "FM HDL: %d jogo(s), HDD APA com %d particao(oes)\n",
+        "FM HDL: %d jogo(s), HDD APA com %d particao(oes), %u MB livres\n",
         hdl_count,
-        hdl_partitions
+        hdl_partitions,
+        hdl_free_mb
     );
 }
 
@@ -2532,6 +2547,12 @@ static void update_hdl_info(void)
 
         printf("FM HDL: conferencia completa %s\n", hdl_verify ? "SIM" : "NAO");
     }
+
+    if (pressed(PAD_UP) && hdl_cursor > 0)
+        hdl_cursor--;
+
+    if (pressed(PAD_DOWN) && hdl_cursor < hdl_count - 1)
+        hdl_cursor++;
 
     if (pressed(PAD_CIRCLE))
         hdl_info_open = 0;
@@ -5708,6 +5729,58 @@ static void gui_icon_music(float x, float y)
 
 
 /*
+ * Circulo cheio (leque de triangulos).
+ */
+static void gui_disc_circle(float cx, float cy, float r, gfx_color c)
+{
+    static const float cosv[17] = { 1, 0.924f, 0.707f, 0.383f, 0, -0.383f, -0.707f, -0.924f, -1,
+                                    -0.924f, -0.707f, -0.383f, 0, 0.383f, 0.707f, 0.924f, 1 };
+    static const float sinv[17] = { 0, 0.383f, 0.707f, 0.924f, 1, 0.924f, 0.707f, 0.383f, 0,
+                                    -0.383f, -0.707f, -0.924f, -1, -0.924f, -0.707f, -0.383f, 0 };
+    int i;
+
+    for (i = 0; i < 16; i++)
+        gfx_triangle(cx, cy, cx + r * cosv[i], cy + r * sinv[i],
+                     cx + r * cosv[i + 1], cy + r * sinv[i + 1], c);
+}
+
+
+/*
+ * ISO (imagem de disco): CD prateado com reflexos coloridos e furo
+ * central.
+ */
+static void gui_icon_disc(float x, float y)
+{
+    float cx = x + 8;
+    float cy = y + 8.5f;
+
+    gui_disc_circle(cx, cy, 8, gfx_rgba(0x8A, 0x92, 0xA6, 0x80));
+    gui_disc_circle(cx, cy, 7, gfx_rgba(0xC8, 0xCE, 0xDC, 0x80));
+
+    /*
+     * Reflexos do arco-iris do CD.
+     */
+    gfx_triangle(cx, cy, cx + 7, cy - 1, cx + 5, cy - 5, gfx_rgba(0x9F, 0xE8, 0xFF, 0x80));
+    gfx_triangle(cx, cy, cx + 5, cy - 5, cx + 1, cy - 7, gfx_rgba(0xF2, 0xA8, 0xE8, 0x80));
+    gfx_triangle(cx, cy, cx - 7, cy + 1, cx - 5, cy + 5, gfx_rgba(0xFF, 0xE8, 0x9A, 0x80));
+    gfx_triangle(cx, cy, cx - 5, cy + 5, cx - 1, cy + 7, gfx_rgba(0xB0, 0xF0, 0xC0, 0x80));
+
+    gui_disc_circle(cx, cy, 2.8f, gfx_rgba(0xEE, 0xF2, 0xF8, 0x80));
+    gui_disc_circle(cx, cy, 1.4f, gfx_rgba(0x0B, 0x16, 0x30, 0x80));
+}
+
+
+static int is_disc_image(const char *name)
+{
+    int length = strlen(name);
+
+    return length > 4 &&
+           (strcasecmp(name + length - 4, ".iso") == 0 ||
+            strcasecmp(name + length - 4, ".zso") == 0);
+}
+
+
+/*
  * App ELF: janela (barra de titulo) com o simbolo de tocar.
  */
 static void gui_icon_elf(float x, float y)
@@ -5949,6 +6022,8 @@ static void gui_files_panel(int focused)
             gui_icon_music(UI_FILES_X + 28, y + 3);
         else if (elf_is_elf(entry->name))
             gui_icon_elf(UI_FILES_X + 28, y + 3);
+        else if (is_disc_image(entry->name))
+            gui_icon_disc(UI_FILES_X + 28, y + 3);
         else
             gui_icon_file(UI_FILES_X + 28, y + 3);
 
@@ -6613,6 +6688,122 @@ static void gui_partition(void)
 
 
 /*
+ * Instalacao HDLoader: jogos (titulo, ID, tamanho, CD/DVD,
+ * situacao), espaco e a conferencia completa.
+ */
+#define HDL_WIN_X       56
+#define HDL_WIN_Y       44
+#define HDL_WIN_W       528
+#define HDL_WIN_H       372
+#define HDL_ROW_H       42
+#define HDL_VISIBLE     5
+
+static void gui_hdl(void)
+{
+    float x = HDL_WIN_X + 16;
+    float w = HDL_WIN_W - 32;
+    float y;
+    unsigned long long total = 0;
+    char line[96];
+    char size_text[24];
+    int top;
+    int i;
+
+
+    snprintf(line, sizeof(line), "Instalar no HDD (HDLoader): %d jogo(s)", hdl_count);
+
+    y = gui_window(HDL_WIN_X, HDL_WIN_Y, HDL_WIN_W, HDL_WIN_H, line);
+
+    top = hdl_cursor >= HDL_VISIBLE ? hdl_cursor - HDL_VISIBLE + 1 : 0;
+
+    for (i = 0; i < hdl_count; i++)
+        if (hdl_state[i] == HDL_GAME_OK)
+            total += (unsigned long long)hdl_games[i].sectors * ISO_SECTOR_SIZE;
+
+
+    for (i = top; i < hdl_count && i < top + HDL_VISIBLE; i++) {
+
+        const IsoGameInfo *game = &hdl_games[i];
+        float row = y + (i - top) * HDL_ROW_H;
+        const char *state_text = NULL;
+        gfx_color state_color = UI_OK;
+        float badge_w;
+
+        if (i == hdl_cursor)
+            gui_selection(x - 6, row - 2, w + 12, HDL_ROW_H - 4, 1);
+
+        /*
+         * Selo CD/DVD.
+         */
+        badge_w = game->is_dvd ? 36 : 28;
+        gfx_rect(x, row + 2, badge_w, 16, game->is_dvd ? gfx_rgba(0x8A, 0x3F, 0xD8, 0x80) : gfx_rgba(0x2F, 0x9E, 0x6B, 0x80));
+        gfx_text(x + 4, row, game->is_dvd ? "DVD" : "CD", UI_TEXT);
+
+        gfx_text_fit(x + badge_w + 8, row, w - badge_w - 100, hdl_names[i], UI_TEXT);
+
+        format_size(size_text, sizeof(size_text), (unsigned long long)game->sectors * ISO_SECTOR_SIZE);
+        gfx_text_right(x + w, row, size_text, UI_TEXT);
+
+        switch (hdl_state[i]) {
+            case HDL_GAME_INSTALLED:
+                state_text = "já instalado (será só conferido)";
+                state_color = UI_WARNING;
+                break;
+            case HDL_GAME_DVD9:
+                state_text = "DVD de duas camadas: ainda não suportado";
+                state_color = UI_ERROR;
+                break;
+            case HDL_GAME_BAD_ID:
+                state_text = "ID fora do padrão SXXX_YYY.ZZ";
+                state_color = UI_ERROR;
+                break;
+        }
+
+        snprintf(line, sizeof(line), "%s   %s", game->game_id, state_text ? state_text : "pronto para instalar");
+        gfx_text_fit(x + badge_w + 8, row + 18, w - badge_w - 8, line,
+                     state_text ? state_color : (i == hdl_cursor ? UI_TEXT : UI_TEXT2));
+    }
+
+    if (hdl_count > HDL_VISIBLE) {
+        snprintf(line, sizeof(line), "%d / %d", hdl_cursor + 1, hdl_count);
+        gfx_text_right(x + w, y + HDL_VISIBLE * HDL_ROW_H - 4, line, UI_TEXT_OFF);
+    }
+
+    y += HDL_VISIBLE * HDL_ROW_H + 14;
+
+
+    /*
+     * Espaco: a instalar x livre.
+     */
+    format_size(size_text, sizeof(size_text), total);
+    snprintf(line, sizeof(line), "A instalar: %s   |   Livre no HDD: %u MB   |   %d partição(ões)",
+             size_text, hdl_free_mb, hdl_partitions);
+    gfx_text_fit(x, y, w, line, total / (1024 * 1024) > hdl_free_mb ? UI_ERROR : UI_TEXT2);
+
+    y += 26;
+
+
+    /*
+     * Conferencia completa.
+     */
+    gfx_border(x, y + 2, 14, 14, 2, hdl_verify ? UI_OK : UI_TEXT_OFF);
+
+    if (hdl_verify)
+        gfx_rect(x + 3, y + 5, 8, 8, UI_OK);
+
+    gfx_text(x + 22, y, hdl_verify ? "Conferir cópia completa: SIM (dobra o tempo)" : "Conferir cópia completa: NÃO",
+             hdl_verify ? UI_OK : UI_TEXT);
+    gfx_text_fit(x + 22, y + 20, w - 22, "A conferência como o OPL lê roda sempre.", UI_TEXT_OFF);
+
+    y = HDL_WIN_Y + HDL_WIN_H - 32;
+
+    i = gfx_button_hint(x, y, GFX_BTN_CROSS, "Instalar");
+    i += gfx_button_hint(x + i, y, GFX_BTN_SQUARE, "Conferir sim/não");
+    gfx_button_hint(x + i, y, GFX_BTN_CIRCLE, "Cancelar");
+}
+
+
+/*
  * Player de MP3: quadro da capa (barras animadas ate a capa ser
  * desenhada), informacoes da tag, tempo e controles.
  */
@@ -6887,6 +7078,8 @@ static void draw_gui_browser(void)
         settings_draw_gui();
     else if (current_screen == SCREEN_DEVICES && format_step != FORMAT_NONE)
         gui_format();
+    else if (files && hdl_info_open)
+        gui_hdl();
     else if (files && partition_step != PARTITION_NONE)
         gui_partition();
     else if (files && keyboard_action != KEYBOARD_NONE)
@@ -6910,7 +7103,7 @@ static int gui_handles_screen(void)
     if (current_screen == SCREEN_DEVICES)
         return 1;
 
-    return current_screen == SCREEN_FILES && !hdl_info_open;
+    return current_screen == SCREEN_FILES;
 }
 
 
