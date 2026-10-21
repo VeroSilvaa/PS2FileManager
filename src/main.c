@@ -41,6 +41,7 @@
 #include "mp3player.h"
 #include "elfrun.h"
 #include "gfx.h"
+#include "ui.h"
 
 
 
@@ -2637,7 +2638,10 @@ static void open_rename_keyboard(void)
     if ((int)strlen(rename_name) > max_length)
         max_length = strlen(rename_name);
 
-    osk_open("RENOMEAR", rename_name, max_length);
+    osk_open("Renomear", rename_name, max_length);
+
+    if (is_memory_card_path(rename_path))
+        osk_ascii_only();
 
     keyboard_action = KEYBOARD_RENAME;
 }
@@ -3036,7 +3040,8 @@ static void update_partition(void)
 
             if (partition_cursor == PARTITION_MENU_CREATE) {
 
-                osk_open("CRIAR PARTICAO: nome", "", APA_MAX_NAME);
+                osk_open("Criar partição: nome", "", APA_MAX_NAME);
+                osk_ascii_only();
 
                 keyboard_action = KEYBOARD_PARTITION;
 
@@ -3271,12 +3276,15 @@ static void execute_operation_menu(void)
             operation_menu_open = 0;
 
             osk_open(
-                "CRIAR PASTA",
+                "Criar pasta",
                 "",
                 strncmp(file_manager.current_path, "mc", 2) == 0
                     ? MC_MAX_NAME
                     : NAME_MAX_TYPED
             );
+
+            if (strncmp(file_manager.current_path, "mc", 2) == 0)
+                osk_ascii_only();
 
             keyboard_action = KEYBOARD_MKDIR;
 
@@ -5614,61 +5622,14 @@ static void draw_file_screen(void)
  * ============================================================ */
 
 /*
- * Cores (secao 4 do documento; alfa do GS 0..128).
+ * Cores, regioes, painel, selecao e janela: ui.h / ui.c.
  */
-#define UI_PANEL        gfx_rgba(0x0B, 0x16, 0x30, 0x64)
-#define UI_BORDER       gfx_rgba(0x2E, 0x5F, 0xB8, 0x80)
-#define UI_TITLE_BAR    gfx_rgba(0x12, 0x30, 0x6E, 0x80)
-#define UI_SEL_TOP      gfx_rgba(0x1E, 0x5B, 0xD8, 0x80)
-#define UI_SEL_BOTTOM   gfx_rgba(0x2F, 0x7B, 0xFF, 0x80)
-#define UI_SEL_DIM      gfx_rgba(0x16, 0x3B, 0x7A, 0x80)
-#define UI_MARKED       gfx_rgba(0x16, 0x3B, 0x7A, 0x80)
-#define UI_TEXT         gfx_rgba(0xE6, 0xEE, 0xFF, 0x80)
-#define UI_TEXT2        gfx_rgba(0x9D, 0xB2, 0xD9, 0x80)
-#define UI_TEXT_OFF     gfx_rgba(0x56, 0x62, 0x7A, 0x80)
-#define UI_OK           gfx_rgba(0x3D, 0xDC, 0x84, 0x80)
-#define UI_ERROR        gfx_rgba(0xE5, 0x48, 0x4D, 0x80)
-#define UI_FOLDER       gfx_rgba(0xF2, 0xC1, 0x4E, 0x80)
-#define UI_FILE         gfx_rgba(0xC8, 0xD4, 0xEE, 0x80)
-#define UI_MUSIC        gfx_rgba(0xD9, 0x8C, 0xFF, 0x80)
-
-/*
- * Regioes (secao 2).
- */
-#define UI_DEV_X        24
-#define UI_DEV_W        176
-#define UI_PANEL_Y      56
-#define UI_PANEL_H      320
-#define UI_FILES_X      208
-#define UI_FILES_W      408
-#define UI_ROW_H        22
-#define UI_ROWS         12
 
 /*
  * Primeira linha visivel da lista de arquivos (a grafica mostra 12
  * linhas; o filemanager rola para 18).
  */
 static int gui_top = 0;
-
-
-static void gui_panel(float x, float y, float w, float h, const char *title)
-{
-    gfx_rect(x, y, w, h, UI_PANEL);
-    gfx_rect(x + 2, y + 2, w - 4, 24, UI_TITLE_BAR);
-    gfx_border(x, y, w, h, 2, UI_BORDER);
-
-    if (title)
-        gfx_text_fit(x + 10, y + 4, w - 20, title, UI_TEXT);
-}
-
-
-static void gui_selection(float x, float y, float w, float h, int focused)
-{
-    if (focused)
-        gfx_rect_vgradient(x, y, w, h, UI_SEL_TOP, UI_SEL_BOTTOM);
-    else
-        gfx_rect(x, y, w, h, UI_SEL_DIM);
-}
 
 
 /*
@@ -6015,26 +5976,6 @@ static void gui_footer(int files)
  * Janelas sobrepostas (secao 3 do documento)
  * ------------------------------------------------------------ */
 
-#define UI_DIM          gfx_rgba(0x00, 0x00, 0x00, 0x40)
-#define UI_WINDOW       gfx_rgba(0x0B, 0x16, 0x30, 0x78)
-#define UI_WARNING      gfx_rgba(0xFF, 0xB0, 0x20, 0x80)
-
-/*
- * Escurece a tela e desenha a janela com titulo. Devolve o y onde
- * comeca o conteudo.
- */
-static float gui_window(float x, float y, float w, float h, const char *title)
-{
-    gfx_rect(0, 0, GFX_W, GFX_H, UI_DIM);
-
-    gfx_rect(x, y, w, h, UI_WINDOW);
-    gfx_rect_vgradient(x + 2, y + 2, w - 4, 26, UI_SEL_TOP, UI_TITLE_BAR);
-    gfx_border(x, y, w, h, 2, UI_BORDER);
-
-    gfx_text_fit(x + 12, y + 5, w - 24, title, UI_TEXT);
-
-    return y + 38;
-}
 
 
 /*
@@ -6567,7 +6508,9 @@ static void draw_gui_browser(void)
     /*
      * Janelas por cima (a lista escurecida atras).
      */
-    if (files && confirm_action != CONFIRM_NONE)
+    if (files && keyboard_action != KEYBOARD_NONE)
+        osk_draw_gui();
+    else if (files && confirm_action != CONFIRM_NONE)
         gui_confirm();
     else if (files && operation_menu_open)
         gui_operation_menu();
@@ -6587,7 +6530,6 @@ static int gui_handles_screen(void)
         return format_step == FORMAT_NONE;
 
     return current_screen == SCREEN_FILES &&
-           keyboard_action == KEYBOARD_NONE &&
            partition_step == PARTITION_NONE &&
            !hdl_info_open;
 }

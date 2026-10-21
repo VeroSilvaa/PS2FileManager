@@ -21,6 +21,12 @@ typedef enum {
 void osk_open(const char *title, const char *initial, int max_length);
 
 /*
+ * Sem a pagina de acentos (depois do osk_open): Memory Card,
+ * particoes APA e campos de rede.
+ */
+void osk_ascii_only(void);
+
+/*
  * Cursor na linha dos numeros (campos de IP).
  */
 void osk_focus_digits(void);
@@ -31,6 +37,11 @@ void osk_focus_digits(void);
 OskResult osk_update(unsigned int buttons);
 
 void osk_draw(void);
+
+/*
+ * Janela grafica (chamada a cada quadro, por cima da tela atual).
+ */
+void osk_draw_gui(void);
 
 const char *osk_text(void);
 

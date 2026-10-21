@@ -136,6 +136,7 @@ static SettingsResult settings_select(void)
 
         default:
             osk_open(field->label, field_text(cursor), field->size - 1);
+            osk_ascii_only();
 
             if (field->type == FIELD_IP || field->type == FIELD_SERVER)
                 osk_focus_digits();
