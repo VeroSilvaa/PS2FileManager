@@ -2,7 +2,7 @@
 
 Gerenciador de arquivos homebrew para **PlayStation 2**, escrito em C com o [PS2SDK](https://github.com/ps2dev/ps2sdk).
 
-> Em desenvolvimento. A interface atual usa a tela de depuração (texto); uma interface gráfica com gsKit está planejada.
+> Em desenvolvimento. Interface gráfica 640×448 (gsKit), em português, toda operada pelo controle.
 
 ## Download
 
@@ -22,16 +22,36 @@ Mover = cópia verificada → conferência dos totais (arquivos e bytes) → exc
 
 ## Recursos
 
+- **Interface gráfica**: tela inicial com cartões dos dispositivos, lista de arquivos com ícones por tipo (pasta, música, app ELF, imagem de disco), janelas de menu, confirmação, progresso e erro, e dicas com os botões do controle
+- **Player de MP3** com tocar em segundo plano, veja abaixo
+- **Executar apps ELF** direto da lista de arquivos, veja abaixo
+- Nomes com **acentos** no SMB (UTF-8) e no pendrive
 - Cópia **verificada byte a byte** (lê o destino de volta e compara); no Colar, **Quadrado** desliga a conferência para copiar mais rápido (o mover sempre confere)
 - Cópia recursiva de pastas e seleção múltipla
 - Copiar, recortar (mover), colar e excluir entre quaisquer dispositivos
-- **Criar pasta** e **renomear** com teclado virtual (no Memory Card, nomes de até 31 caracteres)
+- **Criar pasta** e **renomear** com teclado virtual, com página de acentos (no Memory Card, nomes de até 31 caracteres e sem acentos)
 - **Configuração de rede e SMB** na própria tela: DHCP ou IP estático, servidor, compartilhamento, usuário e senha
 - Progresso em tempo real: barras por arquivo e total, velocidade e tempo restante
 - Confirmação em tela cheia antes de excluir/mover
 - Proteção dos arquivos de sistema dos saves (`icon.sys`, `*.icn`, `B?DATA-SYSTEM`)
 - **Instalação de jogos no HDD no formato HDLoader** (compatível com o OPL), veja abaixo
 - **Formatação** de pendrive e HDD, e criar/excluir partições do HDD, veja abaixo
+
+## Player de MP3
+
+**X** sobre um `.mp3` abre o player: a **pasta vira a playlist** (em ordem alfabética, começando pela música escolhida). Funciona com músicas no pendrive, no HDD e no SMB.
+
+- Título, artista, álbum e faixa das tags **ID3** (v1, v2.2, v2.3, v2.4); duração para MP3 CBR e VBR (Xing/VBRI)
+- Analisador de espectro (16 faixas), barra de tempo e volume
+- Botões na tela (**Esquerda/Direita** escolhe, **X** aciona): anterior, tocar/pausar, próxima, parar, aleatório, repetir (uma/todas)
+- **Start** tocar/pausar, **L1/R1** faixa anterior/próxima, **Cima/Baixo** volume
+- **Círculo** volta para a lista **com a música tocando**; **Select** reabre o player. A música atual aparece no topo da tela.
+
+Decodificação pelo [minimp3](https://github.com/lieff/minimp3) (CC0) e saída pelo `audsrv` do PS2SDK.
+
+## Executar apps ELF
+
+**X** sobre um `.elf` pede confirmação e executa o programa (como o wLaunchELF faz). Testado no PCSX2 com o OPL a partir do pendrive.
 
 ## Formatar (pendrive e HDD)
 
@@ -68,7 +88,7 @@ Instala ISOs de jogos de PS2 que estejam no **USB** ou no **SMB** diretamente no
 
 1. Marque uma ou mais ISOs com **Quadrado** e aperte **R1**.
 2. Escolha **Instalar no HDD (HDLoader)**. A opção só fica disponível se todos os itens marcados forem ISOs de jogo de PS2 (o ID é lido do `SYSTEM.CNF`) e houver um HDD formatado em APA.
-3. Confira a lista de jogos (ID, CD/DVD, tamanho). **Quadrado** liga ou desliga a *conferência completa* (padrão: desligada). Aperte **X** para instalar.
+3. Confira a lista de jogos (ID, CD/DVD, tamanho e situação: pronto, já instalado ou não suportado) e o espaço livre no HDD. **Quadrado** liga ou desliga a *conferência completa* (padrão: desligada). Aperte **X** para instalar.
 
 Cada jogo vira uma partição `PP.<ID>.HDL.<nome>`, com subpartições quando ele não cabe numa só (jogos acima de 1 GB). Depois da gravação, o app:
 
@@ -85,14 +105,28 @@ Limitações atuais:
 
 ## Controles
 
+**Tela inicial (dispositivos)**
+
 | Botão | Ação |
 |---|---|
-| Direcional | Mover o cursor |
-| X | Abrir dispositivo / entrar na pasta |
+| Cima/Baixo, Esquerda/Direita | Escolher o dispositivo (lista e cartões) |
+| X | Abrir o dispositivo |
+| R1 | Formatar (HDD e pendrive) |
+| Triângulo | Atualizar |
+| L1 | Voltar para a pasta que estava aberta |
+
+**Lista de arquivos**
+
+| Botão | Ação |
+|---|---|
+| Cima/Baixo | Mover o cursor |
+| X | Entrar na pasta / tocar MP3 / executar ELF |
 | Quadrado | Marcar/desmarcar item |
-| R1 | Menu de operações (copiar, recortar, colar, excluir...) |
-| Triângulo | Marcar todos / desmarcar todos (na lista de arquivos); atualizar (na lista de dispositivos) |
-| Círculo | Voltar / cancelar |
+| Triângulo | Marcar todos / desmarcar todos |
+| R1 | Menu de operações (copiar, recortar, colar, excluir, criar pasta, renomear, HDLoader...) |
+| Esquerda | Ir para a lista de dispositivos |
+| Círculo | Voltar |
+| Select | Abrir o player (com música tocando) |
 
 Excluir, mover ou renomear arquivos de sistema de um save só é confirmado com **Triângulo** (X é recusado).
 
@@ -100,13 +134,15 @@ Excluir, mover ou renomear arquivos de sistema de um save só é confirmado com 
 
 | Botão | Ação |
 |---|---|
-| Direcional | Mover na grade de caracteres |
-| X | Digitar o caractere |
+| Direcional | Mover na grade (a última linha tem Teclas, Espaço, Apagar e OK) |
+| X | Digitar o caractere / acionar a tecla |
 | Quadrado | Apagar |
 | R1 | Espaço |
-| Triângulo | Trocar entre maiúsculas, minúsculas e símbolos |
+| Triângulo | Trocar entre maiúsculas, minúsculas, símbolos e acentos |
 | Start | Confirmar |
 | Círculo | Cancelar |
+
+Nos campos de IP o teclado é **numérico** (0–9 e ponto, com Apagar e Limpar).
 
 ## Compilar
 
@@ -116,10 +152,14 @@ Requer [Docker](https://www.docker.com/). A imagem usa o toolchain oficial `ghcr
 docker compose run --rm ps2filemanager make
 ```
 
-O resultado é `PS2FileManager.elf`. Os módulos IOP (IRX) do PS2SDK são embutidos no ELF durante a compilação, junto com dois módulos compilados pelo próprio projeto:
+O resultado é `PS2FileManager.elf`. Os módulos IOP (IRX) do PS2SDK são embutidos no ELF durante a compilação, junto com módulos compilados pelo próprio projeto:
 
 - `iop/ps2hdd-hdl`: o driver APA do PS2SDK, sem modificações no código, compilado com o suporte a partições HDLoader (que no PS2SDK só existe na versão para PC).
 - `iop/hdlwrite`: grava os dados do jogo nas fatias da partição HDLoader.
+- `iop/fatfmt`: formatação FAT32/exFAT e tabelas MBR/GPT (FatFs).
+- `iop/smbman-utf8`: o `smbman` do PS2SDK com uma única mudança, a conversão dos nomes UTF-16 ↔ UTF-8 (o original trocava todo caractere fora do ASCII por `?`, e pastas com acento não abriam).
+
+As imagens da interface (fundo, fontes, logotipo e botões) ficam em `assets/` e são geradas por `tools/make_assets.sh` a partir das artes originais.
 
 ## Testar no PCSX2
 
@@ -141,11 +181,11 @@ pcsx2-qt -elf PS2FileManager.elf
 
 ## Configurar o SMB (rede)
 
-Na lista de dispositivos, abra **Configuracoes de rede e SMB** (último item):
+Na tela inicial, abra **Configurações** (último item):
 
 | Campo | Padrão |
 |---|---|
-| Modo de IP | DHCP (X alterna para estático) |
+| Modo de IP | DHCP (X ou Esquerda/Direita alternam para estático) |
 | IP do PS2, máscara, gateway, DNS | usados só no modo estático |
 | Servidor SMB | `192.168.1.9` (só IP, sem nome) |
 | Compartilhamento | `samba` |
@@ -174,8 +214,10 @@ Requisitos do servidor:
 ## Planejado
 
 - HDLoader: DVD de duas camadas
-- Interface gráfica 640×448 com gsKit
-- Player de MP3, servidor FTP
+- Player de MP3: capa do álbum
+- Servidor FTP
+- Testes em console real (log de depuração gravado no SMB/pendrive)
+- Áudio Bluetooth para o player (experimental, depende de testes em console real)
 
 ## Apoie o projeto
 
@@ -197,10 +239,15 @@ Chave aleatória: `2c7f2bbb-2b6b-4b41-8b5c-b47a222531d6` (Veridiano Silva)
 - [wLaunchELF](https://github.com/ps2homebrew/wLaunchELF) e [Open PS2 Loader](https://github.com/ps2homebrew/Open-PS2-Loader) — referência de inicialização do IOP, HDD, USB e do formato HDLoader
 - [HDLGameInstaller](https://github.com/ps2homebrew/HDLGameInstaller) e [hdl-dump](https://github.com/ps2homebrew/hdl-dump) — referência do formato HDLoader (nenhum código copiado)
 - [FatFs](http://elm-chan.org/fsw/ff/) (ChaN) — formatação FAT32/exFAT
+- [gsKit](https://github.com/ps2dev/gsKit) e libpng — interface gráfica
+- [minimp3](https://github.com/lieff/minimp3) (lieff) — decodificação de MP3
+- Fontes [Noto Sans](https://fonts.google.com/noto) e [Orbitron](https://fonts.google.com/specimen/Orbitron) (SIL Open Font License)
 
 ## Licença
 
 [MIT](LICENSE), exceto:
 
-- `iop/ps2hdd-hdl/`: código do PS2SDK sob a Academic Free License 2.0 ([LICENSE-PS2SDK](iop/ps2hdd-hdl/LICENSE-PS2SDK));
-- `iop/fatfmt/fatfs/`: FatFs de ChaN (fork usado pelo PS2SDK), sob a licença FatFs ([LICENSE-FatFs.txt](iop/fatfmt/fatfs/LICENSE-FatFs.txt)).
+- `iop/ps2hdd-hdl/` e `iop/smbman-utf8/`: código do PS2SDK sob a Academic Free License 2.0 ([LICENSE-PS2SDK](iop/ps2hdd-hdl/LICENSE-PS2SDK));
+- `iop/fatfmt/fatfs/`: FatFs de ChaN (fork usado pelo PS2SDK), sob a licença FatFs ([LICENSE-FatFs.txt](iop/fatfmt/fatfs/LICENSE-FatFs.txt));
+- `third_party/minimp3/`: CC0 ([LICENSE](third_party/minimp3/LICENSE));
+- `third_party/fonts/`: SIL Open Font License ([OFL.txt](third_party/fonts/OFL.txt), [OFL-Orbitron.txt](third_party/fonts/OFL-Orbitron.txt)).
