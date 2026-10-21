@@ -324,33 +324,77 @@ static int char_width(unsigned char c)
 }
 
 
+/*
+ * Proximo caractere como byte Windows-1252 (o atlas). Textos do
+ * programa sao UTF-8 (os .c); nomes de arquivo que nao forem UTF-8
+ * valido passam byte a byte. Avanca *text.
+ */
+static unsigned char next_char(const char **text)
+{
+    const unsigned char *p = (const unsigned char *)*text;
+    unsigned int code;
+
+    if (p[0] >= 0xC2 && p[0] <= 0xDF && (p[1] & 0xC0) == 0x80) {
+
+        code = ((p[0] & 0x1F) << 6) | (p[1] & 0x3F);
+        *text += 2;
+
+        return code <= 0xFF ? (unsigned char)code : '?';
+    }
+
+    if ((p[0] & 0xF0) == 0xE0 && (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80) {
+
+        code = ((p[0] & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F);
+        *text += 3;
+
+        switch (code) {
+            case 0x2013: return 0x96;   /* travessao curto */
+            case 0x2014: return 0x97;
+            case 0x2018: return 0x91;
+            case 0x2019: return 0x92;
+            case 0x201C: return 0x93;
+            case 0x201D: return 0x94;
+            case 0x2022: return 0x95;   /* marcador */
+            case 0x2026: return 0x85;   /* reticencias */
+            case 0x20AC: return 0x80;   /* euro */
+        }
+
+        return '?';
+    }
+
+    *text += 1;
+
+    return p[0];
+}
+
+
 int gfx_text_width(const char *text)
 {
     int width = 0;
 
     while (*text)
-        width += char_width((unsigned char)*text++);
+        width += char_width(next_char(&text));
 
     return width;
 }
 
 
 /*
- * Desenha 'length' bytes de text (sem limite: -1).
+ * Desenha ate 'length' bytes de text (sem limite: -1).
  */
 static int draw_sans(float x, float y, const char *text, int length, gfx_color color)
 {
+    const char *end = length < 0 ? NULL : text + length;
     float start = x;
-    int i;
 
     if (!sans.Mem)
         return 0;
 
     gsKit_TexManager_bind(gs, &sans);
 
-    for (i = 0; text[i] && (length < 0 || i < length); i++) {
+    while (*text && (!end || text < end)) {
 
-        unsigned char c = (unsigned char)text[i];
+        unsigned char c = next_char(&text);
         int width = char_width(c);
         int index;
         float u;
@@ -389,25 +433,27 @@ void gfx_text_fit(float x, float y, float max_w, const char *text, gfx_color col
 {
     static const char ellipsis[] = "\x85";      /* ... em Windows-1252 */
     int ellipsis_w = char_width(0x85);
+    const char *p = text;
     int width = 0;
-    int i;
 
     if (gfx_text_width(text) <= max_w) {
         draw_sans(x, y, text, -1, color);
         return;
     }
 
-    for (i = 0; text[i]; i++) {
+    while (*p) {
 
-        int w = char_width((unsigned char)text[i]);
+        const char *next = p;
+        int w = char_width(next_char(&next));
 
         if (width + w + ellipsis_w > max_w)
             break;
 
         width += w;
+        p = next;
     }
 
-    draw_sans(x, y, text, i, color);
+    draw_sans(x, y, text, (int)(p - text), color);
     draw_sans(x + width, y, ellipsis, -1, color);
 }
 

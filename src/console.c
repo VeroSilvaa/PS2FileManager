@@ -122,4 +122,11 @@ void scr_clear(void)
 
     cursor_x = 0;
     cursor_y = 0;
+
+    /*
+     * Quem limpa a tela vai escrever nela (progresso, conexao...):
+     * mostra a camada de texto ate o laco principal escolher a
+     * tela grafica de novo.
+     */
+    gfx_set_screen(NULL);
 }

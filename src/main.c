@@ -5609,12 +5609,30 @@ static void gui_header(void)
 
     if (line[0]) {
 
-        float w = gfx_text_width(line);
+        /*
+         * "Tocando: Artista - Titulo  01:23 / 03:45": o tempo (depois
+         * dos dois espacos) fica sempre inteiro; o nome e cortado.
+         */
+        char *time_part = NULL;
+        char *p = line;
+        float right = UI_DEV_X + 592;
 
-        if (w > 400)
-            gfx_text_fit(UI_DEV_X + 592 - 400, 20, 400, line, UI_TEXT2);
+        while ((p = strstr(p, "  ")) != NULL)
+            time_part = p++;
+
+        if (time_part) {
+
+            *time_part = '\0';
+            time_part += 2;
+
+            gfx_text_right(right, 20, time_part, UI_TEXT);
+            right -= gfx_text_width(time_part) + 12;
+        }
+
+        if (gfx_text_width(line) > right - 200)
+            gfx_text_fit(200, 20, right - 200, line, UI_TEXT2);
         else
-            gfx_text_right(UI_DEV_X + 592, 20, line, UI_TEXT2);
+            gfx_text_right(right, 20, line, UI_TEXT2);
     }
 }
 
@@ -5775,6 +5793,209 @@ static void gui_footer(int files)
 }
 
 
+/* ------------------------------------------------------------
+ * Janelas sobrepostas (secao 3 do documento)
+ * ------------------------------------------------------------ */
+
+#define UI_DIM          gfx_rgba(0x00, 0x00, 0x00, 0x40)
+#define UI_WINDOW       gfx_rgba(0x0B, 0x16, 0x30, 0x78)
+#define UI_WARNING      gfx_rgba(0xFF, 0xB0, 0x20, 0x80)
+
+/*
+ * Escurece a tela e desenha a janela com titulo. Devolve o y onde
+ * comeca o conteudo.
+ */
+static float gui_window(float x, float y, float w, float h, const char *title)
+{
+    gfx_rect(0, 0, GFX_W, GFX_H, UI_DIM);
+
+    gfx_rect(x, y, w, h, UI_WINDOW);
+    gfx_rect_vgradient(x + 2, y + 2, w - 4, 26, UI_SEL_TOP, UI_TITLE_BAR);
+    gfx_border(x, y, w, h, 2, UI_BORDER);
+
+    gfx_text_fit(x + 12, y + 5, w - 24, title, UI_TEXT);
+
+    return y + 38;
+}
+
+
+/*
+ * Menu R1 (T3): x=392, um item de 26 px por operacao.
+ */
+static void gui_operation_menu(void)
+{
+    float x = 392;
+    float w = 216;
+    float y = gui_window(x, 64, w, 38 + MENU_ITEM_COUNT * 26 + 36, "Operações");
+    int i;
+
+    for (i = 0; i < MENU_ITEM_COUNT; i++) {
+
+        int disabled = i == MENU_HDL && !hdl_available;
+        float row = y + i * 26;
+
+        if (i == operation_menu_cursor)
+            gui_selection(x + 6, row - 2, w - 12, 24, 1);
+
+        gfx_text_fit(x + 16, row, w - 28, operation_menu[i], disabled ? UI_TEXT_OFF : UI_TEXT);
+    }
+
+    y += MENU_ITEM_COUNT * 26 + 6;
+
+    gfx_button_hint(x + 12, y, GFX_BTN_CROSS, "OK");
+    gfx_button_hint(x + 92, y, GFX_BTN_CIRCLE, "Fechar");
+}
+
+
+/*
+ * Ate 'max' nomes de uma lista (selecao ou clipboard) com
+ * [SISTEMA] nos arquivos de sistema do save.
+ */
+static float gui_name_list(float x, float y, float w, int from_clipboard, int max)
+{
+    int shown = 0;
+    int total = 0;
+    int i;
+
+    if (from_clipboard) {
+
+        total = clipboard.count;
+
+        for (i = 0; i < clipboard.count && shown < max; i++, shown++) {
+
+            const char *name = path_filename(clipboard.paths[i]);
+
+            gfx_text_fit(x, y + shown * 20, w, name, is_system_name(name) ? UI_WARNING : UI_TEXT);
+        }
+
+    } else {
+
+        for (i = 0; i < file_manager.count; i++) {
+
+            FMEntry *entry = &file_manager.entries[i];
+
+            if (!entry->selected)
+                continue;
+
+            total++;
+
+            if (shown < max) {
+                gfx_text_fit(x, y + shown * 20, w, entry->name,
+                             is_system_name(entry->name) ? UI_WARNING : UI_TEXT);
+                shown++;
+            }
+        }
+    }
+
+    if (total > shown) {
+
+        char more[32];
+
+        snprintf(more, sizeof(more), "… e mais %d", total - shown);
+        gfx_text(x, y + shown * 20, more, UI_TEXT2);
+        shown++;
+    }
+
+    return y + shown * 20 + 6;
+}
+
+
+/*
+ * Confirmacoes (T6): excluir, mover, colar, renomear arquivo de
+ * sistema, executar ELF.
+ */
+static void gui_confirm(void)
+{
+    float x = 90;
+    float w = 460;
+    float h = 300;
+    float top = 72;
+    float y;
+    float by = top + h - 30;
+    int system = confirm_has_system();
+    char line[128];
+
+    switch (confirm_action) {
+
+        case CONFIRM_DELETE:
+
+            snprintf(line, sizeof(line), "Excluir %d item(ns)?", fm_selected_count(&file_manager));
+            y = gui_window(x, top, w, h, "Excluir");
+            gfx_text(x + 16, y, line, UI_TEXT);
+            y = gui_name_list(x + 28, y + 26, w - 44, 0, 5);
+            gfx_text(x + 16, y, "Pastas são excluídas com todo o conteúdo.", UI_TEXT2);
+            gfx_text(x + 16, y + 20, "Esta operação NÃO pode ser desfeita.", UI_ERROR);
+            break;
+
+        case CONFIRM_MOVE:
+
+            snprintf(line, sizeof(line), "Mover %d item(ns) para:", clipboard.count);
+            y = gui_window(x, top, w, h, "Mover");
+            gfx_text(x + 16, y, line, UI_TEXT);
+            gfx_text_fit(x + 28, y + 20, w - 44, file_manager.current_path, UI_OK);
+            y = gui_name_list(x + 28, y + 46, w - 44, 1, 4);
+            gfx_text(x + 16, y, "A origem só é excluída depois da cópia", UI_TEXT2);
+            gfx_text(x + 16, y + 20, "verificada byte a byte.", UI_TEXT2);
+            break;
+
+        case CONFIRM_PASTE:
+
+            snprintf(line, sizeof(line), "Colar %d item(ns) em:", clipboard.count);
+            y = gui_window(x, top, w, h, "Colar");
+            gfx_text(x + 16, y, line, UI_TEXT);
+            gfx_text_fit(x + 28, y + 20, w - 44, file_manager.current_path, UI_OK);
+            y = gui_name_list(x + 28, y + 46, w - 44, 1, 4);
+            gfx_text(x + 16, y, "Conferir cópia (relendo o destino):", UI_TEXT2);
+            gfx_text(x + 270, y, paste_verify ? "SIM" : "NÃO (mais rápido)", paste_verify ? UI_OK : UI_WARNING);
+            break;
+
+        case CONFIRM_RENAME:
+
+            y = gui_window(x, top, w, h, "Renomear arquivo de sistema");
+            gfx_text_fit(x + 16, y, w - 32, rename_name, UI_WARNING);
+            gfx_text(x + 16, y + 30, "icon.sys, .icn e B?DATA-SYSTEM são lidos pela", UI_TEXT2);
+            gfx_text(x + 16, y + 50, "BIOS pelo nome. Com outro nome o save pode", UI_TEXT2);
+            gfx_text(x + 16, y + 70, "ficar sem ícone ou \"corrompido\".", UI_TEXT2);
+            break;
+
+        case CONFIRM_RUN_ELF:
+
+            y = gui_window(x, top, w, h, "Executar programa");
+            gfx_text(x + 16, y, "Executar este programa?", UI_TEXT);
+            gfx_text_fit(x + 28, y + 24, w - 44, run_elf_path, UI_OK);
+            gfx_text(x + 16, y + 60, "O PS2FileManager será fechado (o IOP é reiniciado).", UI_TEXT2);
+            gfx_text(x + 16, y + 80, "A música, se estiver tocando, para.", UI_TEXT2);
+            break;
+
+        default:
+            return;
+    }
+
+
+    if (system && confirm_action != CONFIRM_RENAME) {
+        gfx_text(x + 16, by - 50, "ATENÇÃO: inclui arquivos de SISTEMA do save", UI_WARNING);
+        gfx_text(x + 16, by - 30, "(icon.sys, .icn, B?DATA-SYSTEM).", UI_WARNING);
+    }
+
+    /*
+     * Botoes: com arquivo de sistema so TRIANGULO confirma.
+     */
+    {
+        float bx = x + 16;
+
+        if (system)
+            bx += gfx_button_hint(bx, by, GFX_BTN_TRIANGLE, "Confirmar");
+        else
+            bx += gfx_button_hint(bx, by, GFX_BTN_CROSS, confirm_action == CONFIRM_RUN_ELF ? "Executar" : "Confirmar");
+
+        if (confirm_action == CONFIRM_PASTE)
+            bx += gfx_button_hint(bx, by, GFX_BTN_SQUARE, "Conferir sim/não");
+
+        gfx_button_hint(bx, by, GFX_BTN_CIRCLE, "Cancelar");
+    }
+}
+
+
 static void draw_gui_browser(void)
 {
     int files = current_screen == SCREEN_FILES;
@@ -5790,6 +6011,30 @@ static void draw_gui_browser(void)
                  strncmp(status_message, "ERRO", 4) == 0 ? UI_ERROR : UI_TEXT2);
 
     gui_footer(files);
+
+    /*
+     * Janelas por cima (a lista escurecida atras).
+     */
+    if (files && confirm_action != CONFIRM_NONE)
+        gui_confirm();
+    else if (files && operation_menu_open)
+        gui_operation_menu();
+}
+
+
+/*
+ * Telas desenhadas pela interface grafica (as outras: camada de
+ * texto): navegacao, menu R1 e confirmacoes.
+ */
+static int gui_handles_screen(void)
+{
+    if (current_screen == SCREEN_DEVICES)
+        return format_step == FORMAT_NONE;
+
+    return current_screen == SCREEN_FILES &&
+           keyboard_action == KEYBOARD_NONE &&
+           partition_step == PARTITION_NONE &&
+           !hdl_info_open;
 }
 
 
@@ -5819,7 +6064,7 @@ static void draw_screen(void)
      * Telas convertidas para a interface grafica: o gfx chama o
      * desenho a cada quadro. As outras usam a camada de texto.
      */
-    if (screen_is_plain()) {
+    if (gui_handles_screen()) {
 
         gfx_set_screen(draw_gui_browser);
 
