@@ -25,7 +25,7 @@ IRX_OBJS += irx/AUDSRV_irx.o
 EE_OBJS += $(IRX_OBJS)
 
 # Interface grafica: PNGs de assets/ (tools/make_assets.sh) embutidos
-ASSET_OBJS = irx/bg_png.o irx/font_mono_png.o irx/font_sans_png.o irx/logo_png.o
+ASSET_OBJS = irx/bg_png.o irx/font_mono_png.o irx/font_sans_png.o irx/logo_png.o irx/buttons_png.o
 EE_OBJS += $(ASSET_OBJS)
 
 EE_INCS = -I$(PS2SDK)/ee/include -I$(PS2SDK)/common/include -I$(PS2SDK)/ports/include \
@@ -63,7 +63,12 @@ irx/logo_png.c: assets/logo.png
 	@mkdir -p irx
 	bin2c $< $@ logo_png
 
-src/gfx.o: assets/font_sans_14.h
+# Botoes: recortes do "Kit de Botões de Controle PlayStation.png"
+irx/buttons_png.c: assets/buttons.png
+	@mkdir -p irx
+	bin2c $< $@ buttons_png
+
+src/gfx.o: assets/font_sans_14.h assets/buttons.h
 
 # Nome do arquivo diferente do simbolo (ps2ip-nm tem hifen)
 irx/DEV9_irx.c: $(PS2SDK)/iop/irx/ps2dev9.irx
@@ -86,7 +91,13 @@ irx/PS2IPS_irx.c: $(PS2SDK)/iop/irx/ps2ips.irx
 	@mkdir -p irx
 	bin2c $< $@ PS2IPS_irx
 
-irx/SMBMAN_irx.c: $(PS2SDK)/iop/irx/smbman.irx
+# SMBMAN proprio: o do PS2SDK com nomes em UTF-8 (iop/smbman-utf8)
+SMBMAN_DIR = iop/smbman-utf8
+
+$(SMBMAN_DIR)/smbman-utf8.irx: $(wildcard $(SMBMAN_DIR)/src/*) $(SMBMAN_DIR)/Makefile
+	$(MAKE) -C $(SMBMAN_DIR)
+
+irx/SMBMAN_irx.c: $(SMBMAN_DIR)/smbman-utf8.irx
 	@mkdir -p irx
 	bin2c $< $@ SMBMAN_irx
 
@@ -155,6 +166,7 @@ clean:
 	$(MAKE) -C $(HDD_HDL_DIR) clean
 	$(MAKE) -C $(HDLWRITE_DIR) clean
 	$(MAKE) -C $(FATFMT_DIR) clean
+	$(MAKE) -C $(SMBMAN_DIR) clean
 
 include $(PS2SDK)/samples/Makefile.pref
 include $(PS2SDK)/samples/Makefile.eeglobal

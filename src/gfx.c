@@ -29,6 +29,11 @@ extern unsigned int size_font_sans_png;
 extern unsigned char logo_png[];
 extern unsigned int size_logo_png;
 
+extern unsigned char buttons_png[];
+extern unsigned int size_buttons_png;
+
+#include "buttons.h"
+
 #define SCREEN_W        640
 #define SCREEN_H        448
 
@@ -50,6 +55,7 @@ static GSTEXTURE background;
 static GSTEXTURE font;
 static GSTEXTURE sans;
 static GSTEXTURE logo;
+static GSTEXTURE buttons;
 
 /*
  * Tela convertida (desenha o quadro) ou NULL (camada de texto).
@@ -220,6 +226,11 @@ int gfx_init(void)
      * Em PAL a imagem e esticada na vertical: filtro suave.
      */
     logo.Filter = GS_FILTER_LINEAR;
+
+    if (load_rgba(buttons_png, size_buttons_png, &buttons) < 0)
+        printf("FM GFX: botoes nao carregaram\n");
+
+    buttons.Filter = GS_FILTER_LINEAR;
 
     ready = 1;
 
@@ -549,6 +560,42 @@ int gfx_button_hint(float x, float y, GfxButton button, const char *label)
     gfx_color text = gfx_rgba(0xE6, 0xEE, 0xFF, 0x80);
     gfx_color dark = gfx_rgba(0x0B, 0x16, 0x30, 0x80);
     float icon_w = 18;
+
+    /*
+     * Botao do kit (assets/buttons.png).
+     */
+    if (buttons.Mem && button < (int)(sizeof(button_rects) / sizeof(button_rects[0])) &&
+        button_rects[button][2] > 0) {
+
+        const unsigned char *r = button_rects[button];
+        float top = y + 9 - r[3] / 2.0f;
+
+        gsKit_TexManager_bind(gs, &buttons);
+
+        gsKit_prim_sprite_texture(gs, &buttons,
+                                  x, top * scale_y, r[0], r[1],
+                                  x + r[2], (top + r[3]) * scale_y, r[0] + r[2], r[1] + r[3],
+                                  2, COLOR_WHITE);
+
+        icon_w = r[2];
+
+        return (int)(icon_w + 4 + gfx_text(x + icon_w + 4, y - 1, label, text) + 16);
+    }
+
+    /*
+     * SELECT/START: tecla escura com o nome, como as do kit.
+     */
+    if (button == GFX_BTN_SELECT || button == GFX_BTN_START) {
+
+        icon_w = gfx_text_width(names[button]) + 10;
+
+        gfx_rect(x, y, icon_w, 18, gfx_rgba(0x0E, 0x10, 0x14, 0x80));
+        gfx_rect_vgradient(x + 1, y + 1, icon_w - 2, 16,
+                           gfx_rgba(0x5A, 0x5E, 0x66, 0x80), gfx_rgba(0x2C, 0x2F, 0x35, 0x80));
+        gfx_text(x + 5, y - 1, names[button], gfx_rgba(0xD8, 0xDE, 0xEA, 0x80));
+
+        return (int)(icon_w + 4 + gfx_text(x + icon_w + 4, y - 1, label, text) + 16);
+    }
 
     switch (button) {
 

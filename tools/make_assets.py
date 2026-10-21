@@ -192,12 +192,141 @@ def make_logo():
     print("logo: %dx%d" % logo.size)
 
 
+BUTTONS_SRC = os.path.join(ROOT, "Kit de Botões de Controle PlayStation.png")
+
+# Recortes do kit (1536x1024), na ordem do GfxButton (include/gfx.h).
+# ("circle", cx, cy, r) | ("rrect", x0, y0, x1, y1, raio) |
+# ("poly", [pontos]) | None (desenhado pelo codigo), e o tamanho final.
+BUTTONS = [
+    ("cross",    ("circle", 243, 166, 128), (20, 20)),
+    ("circle",   ("circle", 565, 166, 128), (20, 20)),
+    ("square",   ("circle", 1270, 166, 128), (20, 20)),
+    ("triangle", ("circle", 919, 166, 128), (20, 20)),
+    ("l1",       ("rrect", 118, 337, 374, 474, 34), (32, 18)),
+    ("r1",       ("rrect", 799, 337, 1061, 474, 34), (32, 18)),
+    ("select",   None, None),
+    ("start",    None, None),
+    # Direcional: a tampa da tecla "cima" do kit com uma seta clara
+    # desenhada por cima (a seta original some no tamanho pequeno).
+    ("up",       ("key", "up"), (18, 18)),
+    ("down",     ("key", "down"), (18, 18)),
+    ("left",     ("key", "left"), (18, 18)),
+    ("right",    ("key", "right"), (18, 18)),
+    ("l2",       ("rrect", 444, 337, 702, 474, 34), (32, 18)),
+    ("r2",       ("rrect", 1149, 337, 1415, 474, 34), (32, 18)),
+]
+
+
+def make_buttons():
+    """
+    assets/buttons.png (atlas RGBA, uma linha) + assets/buttons.h
+    (retangulo de cada botao). Cada botao e recortado do kit com uma
+    mascara (fundo transparente) e reduzido com alfa pre-multiplicado.
+    """
+    src = Image.open(BUTTONS_SRC).convert("RGBA")
+    icons = []
+
+    for name, shape, size in BUTTONS:
+
+        if shape is None:
+            icons.append((name, None))
+            continue
+
+        mask = Image.new("L", src.size, 0)
+        md = ImageDraw.Draw(mask)
+
+        if shape[0] == "circle":
+            _, cx, cy, r = shape
+            box = (cx - r, cy - r, cx + r, cy + r)
+            md.ellipse(box, fill=255)
+        elif shape[0] == "key":
+            # Parte quadrada da tecla "cima" (sem a ponta).
+            box = (238, 672, 364, 768)
+            md.rounded_rectangle(box, 20, fill=255)
+        elif shape[0] == "rrect":
+            _, x0, y0, x1, y1, radius = shape
+            box = (x0, y0, x1, y1)
+            md.rounded_rectangle(box, radius, fill=255)
+        else:
+            points = shape[1]
+            box = (min(p[0] for p in points), min(p[1] for p in points),
+                   max(p[0] for p in points), max(p[1] for p in points))
+            md.polygon(points, fill=255)
+
+        piece = src.copy()
+        piece.putalpha(mask)
+        piece = piece.crop(box)
+
+        if shape[0] == "key":
+            # Tampa sem a seta original: estica uma faixa lisa da
+            # borda esquerda, depois desenha a seta.
+            w, h = piece.size
+            plain = piece.crop((0, 0, 40, h))
+            cap = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            cap.paste(plain, (0, 0))
+            middle = piece.crop((30, 0, 40, h)).resize((w - 80, h))
+            cap.paste(middle, (40, 0))
+            cap.paste(plain.transpose(Image.FLIP_LEFT_RIGHT), (w - 40, 0))
+            cap.putalpha(piece.getchannel("A"))
+            piece = cap.resize((max(w, h), max(w, h)), Image.LANCZOS)
+
+            s = piece.width
+            arrows = {
+                "up":    [(s * 0.5, s * 0.24), (s * 0.78, s * 0.70), (s * 0.22, s * 0.70)],
+                "down":  [(s * 0.22, s * 0.30), (s * 0.78, s * 0.30), (s * 0.5, s * 0.76)],
+                "left":  [(s * 0.24, s * 0.5), (s * 0.70, s * 0.22), (s * 0.70, s * 0.78)],
+                "right": [(s * 0.76, s * 0.5), (s * 0.30, s * 0.22), (s * 0.30, s * 0.78)],
+            }
+            ImageDraw.Draw(piece).polygon(arrows[shape[1]], fill=(0xD8, 0xDE, 0xEA, 255))
+
+        icon = piece.convert("RGBa").resize(size, Image.LANCZOS).convert("RGBA")
+        icons.append((name, icon))
+
+    width = sum(icon.width + 1 for _, icon in icons if icon)
+    height = max(icon.height for _, icon in icons if icon)
+
+    atlas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    rects = []
+    x = 0
+
+    for name, icon in icons:
+        if icon is None:
+            rects.append((name, 0, 0, 0, 0))
+            continue
+        atlas.paste(icon, (x, 0))
+        rects.append((name, x, 0, icon.width, icon.height))
+        x += icon.width + 1
+
+    atlas.save(os.path.join(ASSETS, "buttons.png"), optimize=True)
+
+    with open(os.path.join(ASSETS, "buttons.h"), "w") as out:
+        out.write("/* Gerado por tools/make_assets.py: retangulos do assets/buttons.png,\n"
+                  "   na ordem do GfxButton (largura 0 = desenhado pelo codigo). */\n")
+        out.write("static const unsigned char button_rects[%d][4] = {\n" % len(rects))
+        for name, rx, ry, rw, rh in rects:
+            out.write("    { %3d, %2d, %2d, %2d },   /* %s */\n" % (rx, ry, rw, rh, name))
+        out.write("};\n")
+
+    # Previa ampliada sobre o azul da interface (nao vai para o ELF).
+    preview = Image.new("RGBA", (width, height), (0x0B, 0x16, 0x30, 255))
+    preview = Image.alpha_composite(preview, atlas)
+    preview.resize((width * 4, height * 4), Image.NEAREST).save(os.path.join(ASSETS, "preview_buttons.png"))
+
+    print("botoes: atlas %dx%d" % (width, height))
+
+
 def main():
     os.makedirs(ASSETS, exist_ok=True)
+
+    if len(sys.argv) > 1 and sys.argv[1] == "buttons":
+        make_buttons()
+        return 0
+
     make_background()
     make_font()
     make_sans()
     make_logo()
+    make_buttons()
     return 0
 
 

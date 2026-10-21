@@ -92,7 +92,9 @@ typedef enum {
     GFX_BTN_UP,
     GFX_BTN_DOWN,
     GFX_BTN_LEFT,
-    GFX_BTN_RIGHT
+    GFX_BTN_RIGHT,
+    GFX_BTN_L2,
+    GFX_BTN_R2
 } GfxButton;
 
 /*

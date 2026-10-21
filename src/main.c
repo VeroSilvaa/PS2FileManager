@@ -5630,6 +5630,7 @@ static void draw_file_screen(void)
 #define UI_ERROR        gfx_rgba(0xE5, 0x48, 0x4D, 0x80)
 #define UI_FOLDER       gfx_rgba(0xF2, 0xC1, 0x4E, 0x80)
 #define UI_FILE         gfx_rgba(0xC8, 0xD4, 0xEE, 0x80)
+#define UI_MUSIC        gfx_rgba(0xD9, 0x8C, 0xFF, 0x80)
 
 /*
  * Regioes (secao 2).
@@ -5686,6 +5687,49 @@ static void gui_icon_file(float x, float y)
     gfx_rect(x + 4, y + 5, 8, 1, UI_SEL_TOP);
     gfx_rect(x + 4, y + 8, 8, 1, UI_SEL_TOP);
     gfx_rect(x + 4, y + 11, 6, 1, UI_SEL_TOP);
+}
+
+
+/*
+ * Musica: duas colcheias ligadas (como o simbolo ♫).
+ */
+static void gui_icon_music(float x, float y)
+{
+    gfx_color c = UI_MUSIC;
+
+    /*
+     * Cabecas (ovais) a esquerda das hastes.
+     */
+    gfx_rect(x + 1, y + 12, 6, 3, c);
+    gfx_rect(x + 2, y + 11, 4, 5, c);
+    gfx_rect(x + 9, y + 10, 6, 3, c);
+    gfx_rect(x + 10, y + 9, 4, 5, c);
+
+    /*
+     * Hastes.
+     */
+    gfx_rect(x + 5, y + 3, 2, 10, c);
+    gfx_rect(x + 13, y + 1, 2, 10, c);
+
+    /*
+     * Barra de ligacao, inclinada.
+     */
+    gfx_triangle(x + 5, y + 3, x + 15, y + 1, x + 15, y + 4, c);
+    gfx_triangle(x + 5, y + 3, x + 15, y + 4, x + 5, y + 6, c);
+}
+
+
+/*
+ * App ELF: janela (barra de titulo) com o simbolo de tocar.
+ */
+static void gui_icon_elf(float x, float y)
+{
+    gfx_color c = UI_OK;
+
+    gfx_rect(x, y + 1, 16, 4, c);
+    gfx_border(x, y + 1, 16, 15, 1, c);
+    gfx_rect(x + 2, y + 2, 2, 2, UI_PANEL);
+    gfx_triangle(x + 6, y + 7, x + 6, y + 14, x + 11, y + 10.5f, c);
 }
 
 
@@ -5913,6 +5957,10 @@ static void gui_files_panel(int focused)
 
         if (entry->is_dir)
             gui_icon_folder(UI_FILES_X + 28, y + 3);
+        else if (mp3_is_mp3(entry->name))
+            gui_icon_music(UI_FILES_X + 28, y + 3);
+        else if (elf_is_elf(entry->name))
+            gui_icon_elf(UI_FILES_X + 28, y + 3);
         else
             gui_icon_file(UI_FILES_X + 28, y + 3);
 
