@@ -19,6 +19,9 @@
 /usb/mp3-teste/
 /usb/elf-teste/
 
+# Previa gerada por tools/make_assets.py (nao vai para o ELF)
+/assets/preview_*.png
+
 # Notas internas de desenvolvimento
 /PS2FileManager_Prompt_Desenvolvimento.md
 /função do mp3 player.md
