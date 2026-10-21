@@ -4691,9 +4691,19 @@ static void update_device_screen(void)
 
 
     /*
-     * DIREITA: volta para a pasta aberta (sem perder o lugar).
+     * ESQUERDA/DIREITA: andam nos cartoes (mesma ordem da lista).
      */
-    if (pressed(PAD_RIGHT) && file_manager.current_path[0]) {
+    if (pressed(PAD_LEFT))
+        device_cursor = device_cursor > 0 ? device_cursor - 1 : DEVICE_COUNT - 1;
+
+    if (pressed(PAD_RIGHT))
+        device_cursor = device_cursor < DEVICE_COUNT - 1 ? device_cursor + 1 : 0;
+
+
+    /*
+     * L1: volta para a pasta aberta (sem perder o lugar).
+     */
+    if (pressed(PAD_L1) && file_manager.current_path[0]) {
 
         current_screen = SCREEN_FILES;
 
@@ -5045,7 +5055,7 @@ static void update_file_screen(void)
 
     /*
      * ESQUERDA: vai para a lista de dispositivos, no dispositivo
-     * atual (DIREITA volta para esta pasta).
+     * atual (L1 volta para esta pasta).
      */
     if (pressed(PAD_LEFT)) {
 
@@ -5056,7 +5066,7 @@ static void update_file_screen(void)
 
         current_screen = SCREEN_DEVICES;
 
-        set_status("Dispositivos (DIREITA volta para a pasta).");
+        set_status("Dispositivos (L1 volta para a pasta).");
 
         return;
     }
@@ -5844,6 +5854,91 @@ static void gui_icon_elf(float x, float y)
 
 
 /*
+ * Icone de dispositivo num quadrado de 40 x 40 escalado por k (1 =
+ * cartao, 0.45 = lista). on = 0: cinza (indisponivel).
+ */
+static void gui_device_icon(int device, float x, float y, float k, int on)
+{
+    gfx_color off = gfx_rgba(0x56, 0x62, 0x7A, 0x80);
+    gfx_color dark = gfx_rgba(0x0B, 0x16, 0x30, 0x80);
+
+#define R(a, b, w, h, c) gfx_rect(x + (a) * k, y + (b) * k, (w) * k, (h) * k, on ? (c) : off)
+
+    switch (device) {
+
+        case 0:
+        case 1:
+            /*
+             * Memory Card: corpo claro, etiqueta e contatos.
+             */
+            R(9, 2, 22, 36, gfx_rgba(0xD8, 0xDE, 0xEA, 0x80));
+            R(11, 5, 18, 12, gfx_rgba(0x2F, 0x7B, 0xFF, 0x80));
+            R(12, 32, 3, 4, dark);
+            R(17, 32, 3, 4, dark);
+            R(22, 32, 3, 4, dark);
+            R(27, 32, 2, 4, dark);
+            break;
+
+        case DEVICE_SMB: {
+            /*
+             * Rede: globo com meridiano e paralelos.
+             */
+            gfx_color line = on ? gfx_rgba(0xD8, 0xE6, 0xFF, 0x80) : dark;
+
+            gui_disc_circle(x + 20 * k, y + 20 * k, 17 * k, on ? gfx_rgba(0x2F, 0x7B, 0xFF, 0x80) : off);
+            gfx_rect(x + 4 * k, y + 19 * k, 32 * k, 2 * k, line);
+            gfx_rect(x + 7 * k, y + 11 * k, 26 * k, 1.5f * k, line);
+            gfx_rect(x + 7 * k, y + 28 * k, 26 * k, 1.5f * k, line);
+            gfx_rect(x + 19 * k, y + 3 * k, 2 * k, 34 * k, line);
+            gfx_rect(x + 12 * k, y + 6 * k, 1.5f * k, 28 * k, line);
+            gfx_rect(x + 27 * k, y + 6 * k, 1.5f * k, 28 * k, line);
+            break;
+        }
+
+        case DEVICE_HDD:
+            /*
+             * HDD: caixa com a face de cima clara e o LED.
+             */
+            R(2, 12, 36, 22, gfx_rgba(0x5A, 0x62, 0x78, 0x80));
+            R(2, 8, 36, 6, gfx_rgba(0xA8, 0xB2, 0xC8, 0x80));
+            R(6, 26, 18, 2, dark);
+            R(30, 26, 4, 3, gfx_rgba(0x3D, 0xDC, 0x84, 0x80));
+            break;
+
+        case DEVICE_CONFIG: {
+            /*
+             * Engrenagem: dentes em volta de um circulo com furo.
+             */
+            static const float tx[8] = { 0, 12, 17, 12, 0, -12, -17, -12 };
+            static const float ty[8] = { -17, -12, 0, 12, 17, 12, 0, -12 };
+            gfx_color body = on ? gfx_rgba(0xC8, 0xD4, 0xEE, 0x80) : off;
+            int i;
+
+            for (i = 0; i < 8; i++)
+                gfx_rect(x + (20 + tx[i] - 3.5f) * k, y + (20 + ty[i] - 3.5f) * k, 7 * k, 7 * k, body);
+
+            gui_disc_circle(x + 20 * k, y + 20 * k, 13 * k, body);
+            gui_disc_circle(x + 20 * k, y + 20 * k, 5 * k, dark);
+            break;
+        }
+
+        default:
+            /*
+             * Pendrive: conector prateado e corpo azul.
+             */
+            R(14, 2, 12, 11, gfx_rgba(0xC8, 0xD0, 0xDE, 0x80));
+            R(16, 5, 3, 3, dark);
+            R(21, 5, 3, 3, dark);
+            R(11, 13, 18, 25, gfx_rgba(0x2F, 0x7B, 0xFF, 0x80));
+            R(15, 30, 10, 3, gfx_rgba(0xD8, 0xE6, 0xFF, 0x80));
+            break;
+    }
+
+#undef R
+}
+
+
+/*
  * Nome curto e situacao de cada item da lista de dispositivos.
  */
 static void gui_device_info(int device, const char **name, char *state, int state_size, int *available)
@@ -5859,7 +5954,7 @@ static void gui_device_info(int device, const char **name, char *state, int stat
         case 1:
             *name = device == 0 ? "Memory Card 1" : "Memory Card 2";
             *available = device == 0 ? mc0_available : mc1_available;
-            snprintf(state, state_size, "%s", *available ? "Disponivel" : "Indisponivel");
+            snprintf(state, state_size, "%s", *available ? "Disponível" : "Indisponível");
             break;
 
         case DEVICE_SMB:
@@ -5874,11 +5969,11 @@ static void gui_device_info(int device, const char **name, char *state, int stat
             if (hdd_layout_table() == FATFMT_TABLE_MBR || hdd_layout_table() == FATFMT_TABLE_GPT)
                 snprintf(state, state_size, "%s exFAT/FAT32 (ata0:)", usbfmt_table_name(hdd_layout_table()));
             else
-                snprintf(state, state_size, "APA, %d particao(oes) montada(s)", hdd_mounted_count());
+                snprintf(state, state_size, "APA, %d partição(ões) montada(s)", hdd_mounted_count());
             break;
 
         case DEVICE_CONFIG:
-            *name = "Configuracoes";
+            *name = "Configurações";
             snprintf(state, state_size, "Rede: %s", config_get()->dhcp ? "DHCP" : config_get()->ip);
             break;
 
@@ -5892,7 +5987,7 @@ static void gui_device_info(int device, const char **name, char *state, int stat
                 snprintf(state, state_size, "X para detectar");
             else {
                 *available = usb_present[unit];
-                snprintf(state, state_size, "%s", *available ? "Disponivel" : "Ausente");
+                snprintf(state, state_size, "%s", *available ? "Disponível" : "Ausente");
             }
             break;
         }
@@ -5984,7 +6079,139 @@ static void gui_devices_panel(int focused)
          * Uma linha por item (como o mockup); indisponivel em cinza.
          * A situacao aparece no painel da direita.
          */
-        gfx_text_fit(UI_DEV_X + 14, y + 4, UI_DEV_W - 28, name, available ? UI_TEXT : UI_TEXT_OFF);
+        gui_device_icon(i, UI_DEV_X + 12, y + 5, 0.45f, available);
+
+        gfx_text_fit(UI_DEV_X + 38, y + 4, UI_DEV_W - 50, name, available ? UI_TEXT : UI_TEXT_OFF);
+    }
+}
+
+
+/*
+ * Tela inicial (T1): um cartao por dispositivo, 4 x 2, na ordem da
+ * lista; o escolhido em destaque. Cada cartao: icone, nome curto,
+ * situacao e um detalhe.
+ */
+#define CARD_COLS   4
+#define CARD_GAP    8
+#define CARD_H      134
+
+/*
+ * "<- -> escolhe" com os icones do direcional.
+ */
+static void gui_device_nav_hint(float x, float y)
+{
+    float w = gfx_button_hint(x, y, GFX_BTN_LEFT, "") - 18;
+
+    gfx_button_hint(x + w, y, GFX_BTN_RIGHT, "");
+}
+
+static void gui_device_cards(void)
+{
+    static const char *short_names[DEVICE_COUNT] = { "MC 1", "MC 2", "SMB", "HDD", "USB 0", "USB 1", "Config." };
+    float card_w = (UI_FILES_W - 24 - (CARD_COLS - 1) * CARD_GAP) / CARD_COLS;
+    const char *name;
+    char state[96];
+    char line[64];
+    int available;
+    int i;
+
+
+    gui_device_info(device_cursor, &name, state, sizeof(state), &available);
+
+    gui_panel(UI_FILES_X, UI_PANEL_Y, UI_FILES_W, UI_PANEL_H, "Início");
+
+
+    for (i = 0; i < DEVICE_COUNT; i++) {
+
+        float x = UI_FILES_X + 12 + (i % CARD_COLS) * (card_w + CARD_GAP);
+        float y = UI_PANEL_Y + 34 + (i / CARD_COLS) * (CARD_H + CARD_GAP);
+        int chosen = i == device_cursor;
+        const char *status;
+        gfx_color status_color;
+        const char *detail = "";
+
+        gui_device_info(i, &name, state, sizeof(state), &available);
+
+        /*
+         * Situacao curta e um detalhe por tipo.
+         */
+        switch (i) {
+
+            case DEVICE_SMB:
+                status = smb_get_info()->connected ? "Conectado" : "Rede";
+                status_color = smb_get_info()->connected ? UI_OK : UI_SEL_BOTTOM;
+                detail = config_get()->smb_server;
+                break;
+
+            case DEVICE_HDD:
+                status = "Interno";
+                status_color = UI_OK;
+                detail = (hdd_layout_table() == FATFMT_TABLE_MBR || hdd_layout_table() == FATFMT_TABLE_GPT)
+                             ? "exFAT/FAT32" : "APA";
+                break;
+
+            case DEVICE_CONFIG:
+                status = "Configurar";
+                status_color = UI_SEL_BOTTOM;
+                detail = config_get()->dhcp ? "DHCP" : config_get()->ip;
+                break;
+
+            default:
+                if (i >= DEVICE_USB0 && !usb_ready()) {
+                    status = "Detectar";
+                    status_color = UI_SEL_BOTTOM;
+                } else {
+                    status = available ? "Disponível" : (i >= DEVICE_USB0 ? "Ausente" : "Indisponível");
+                    status_color = available ? UI_OK : UI_TEXT_OFF;
+                }
+
+                if (i >= DEVICE_USB0) {
+                    snprintf(line, sizeof(line), USB_PREFIX "%d:", i - DEVICE_USB0);
+                    detail = line;
+                } else {
+                    detail = i == 0 ? "mc0:" : "mc1:";
+                }
+                break;
+        }
+
+
+        if (chosen) {
+            gfx_rect_vgradient(x, y, card_w, CARD_H, UI_SEL_TOP, gfx_rgba(0x12, 0x30, 0x6E, 0x80));
+            gfx_border(x, y, card_w, CARD_H, 2, UI_SEL_BOTTOM);
+        } else {
+            gfx_rect(x, y, card_w, CARD_H, UI_PANEL);
+            gfx_border(x, y, card_w, CARD_H, 1, UI_BORDER);
+        }
+
+        gui_device_icon(i, x + (card_w - 40) / 2, y + 12, 1.0f, available);
+
+        gfx_text(x + (card_w - gfx_text_width(short_names[i])) / 2, y + 60, short_names[i],
+                 available ? UI_TEXT : UI_TEXT_OFF);
+
+        gfx_text(x + (card_w - gfx_text_width(status)) / 2, y + 82, status,
+                 chosen && status_color == UI_SEL_BOTTOM ? UI_TEXT : status_color);
+
+        if (gfx_text_width(detail) > card_w - 8)
+            gfx_text_fit(x + 4, y + 104, card_w - 8, detail, UI_TEXT2);
+        else
+            gfx_text(x + (card_w - gfx_text_width(detail)) / 2, y + 104, detail, UI_TEXT2);
+    }
+
+
+    /*
+     * Oitava posicao: o nome completo e a situacao do escolhido.
+     */
+    {
+        float x = UI_FILES_X + 12 + 3 * (card_w + CARD_GAP);
+        float y = UI_PANEL_Y + 34 + CARD_H + CARD_GAP;
+
+        gui_device_info(device_cursor, &name, state, sizeof(state), &available);
+
+        gfx_text_fit(x + 2, y + 8, card_w - 4, name, UI_TEXT);
+        gfx_text_fit(x + 2, y + 30, card_w - 4, state, available ? UI_TEXT2 : UI_TEXT_OFF);
+
+        gfx_text_fit(x + 2, y + 62, card_w - 4, "X abre", UI_TEXT_OFF);
+        gui_device_nav_hint(x + 2, y + 82);
     }
 }
 
@@ -5995,26 +6222,7 @@ static void gui_files_panel(int focused)
     int i;
 
     if (!focused) {
-
-        /*
-         * Lista de dispositivos: detalhes do item escolhido.
-         */
-        const char *name;
-        char state[96];
-        int available;
-
-        gui_device_info(device_cursor, &name, state, sizeof(state), &available);
-
-        gui_panel(UI_FILES_X, UI_PANEL_Y, UI_FILES_W, UI_PANEL_H, name);
-
-        gfx_text(UI_FILES_X + 16, UI_PANEL_Y + 40, "Situacao:", UI_TEXT2);
-        gfx_text_fit(UI_FILES_X + 96, UI_PANEL_Y + 40, UI_FILES_W - 112, state, available ? UI_OK : UI_TEXT_OFF);
-
-        gfx_text(UI_FILES_X + 16, UI_PANEL_Y + 80, "X abre o dispositivo.", UI_TEXT2);
-
-        if (device_cursor == DEVICE_HDD || (device_cursor >= DEVICE_USB0 && device_cursor < DEVICE_CONFIG))
-            gfx_text(UI_FILES_X + 16, UI_PANEL_Y + 104, "R1 formata (pede confirmacao).", UI_TEXT2);
-
+        gui_device_cards();
         return;
     }
 
@@ -6115,7 +6323,12 @@ static void gui_footer(int files)
         x += gfx_button_hint(x, y, GFX_BTN_R1, "Menu");
     } else {
         x += gfx_button_hint(x, y, GFX_BTN_TRIANGLE, "Atualizar");
-        x += gfx_button_hint(x, y, GFX_BTN_R1, "Formatar");
+
+        if (device_cursor == DEVICE_HDD || device_cursor == DEVICE_USB0 || device_cursor == DEVICE_USB0 + 1)
+            x += gfx_button_hint(x, y, GFX_BTN_R1, "Formatar");
+
+        if (file_manager.current_path[0])
+            x += gfx_button_hint(x, y, GFX_BTN_L1, "Pasta");
     }
 
     if (mp3player_active())
